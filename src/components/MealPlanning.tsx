@@ -283,7 +283,7 @@ const MealPlanning: React.FC = () => {
       };
       
       setAiMealPlan(fallbackPlan);
-      setAiError("Menggunakan rencana makan cadangan. Coba perbarui untuk mendapatkan rekomendasi AI terbaru.");
+      setAiError("Tidak terhubung ke jaringan. Cek koneksi anda kembali!");
     } finally {
       setIsLoadingAI(false);
     }
@@ -311,17 +311,36 @@ const MealPlanning: React.FC = () => {
   };
 
   const toggleFoodConsumed = (foodId: string, mealType: string, mealIndex?: number) => {
-    const uniqueId = showAiRecommendations
-      ? `ai-meal-${mealIndex}-${formatDateKey(currentDate)}`
-      : `${foodId}-${mealType}-${formatDateKey(currentDate)}`;
+  const uniqueId = showAiRecommendations
+    ? `ai-meal-${mealIndex}-${formatDateKey(currentDate)}`
+    : `${foodId}-${mealType}-${formatDateKey(currentDate)}`;
 
-    const newConsumed = consumedFoods.includes(uniqueId)
-      ? consumedFoods.filter(id => id !== uniqueId)
-      : [...consumedFoods, uniqueId];
+  const newConsumed = consumedFoods.includes(uniqueId)
+    ? consumedFoods.filter(id => id !== uniqueId)
+    : [...consumedFoods, uniqueId];
 
-    setConsumedFoods(newConsumed);
-    localStorage.setItem(`consumed-${formatDateKey(currentDate)}`, JSON.stringify(newConsumed));
-  };
+  setConsumedFoods(newConsumed);
+  localStorage.setItem(`consumed-${formatDateKey(currentDate)}`, JSON.stringify(newConsumed));
+
+  // 🔹 Hitung ulang total nutrisi dari makanan yang dimakan
+  const total = getTotalConsumedNutrition();
+
+  // 🔹 Update progress bar
+  updateNutrition({
+    calories: total.calories,
+    protein: total.protein,
+    carbs: total.carbs,
+    fat: total.fat,
+    date: formatDateKey(currentDate),
+  });
+
+  // 🔹 Simpan agar tetap sinkron saat berpindah menu
+  localStorage.setItem(
+    'total-consumed-nutrition',
+    JSON.stringify({ ...total, date: formatDateKey(currentDate) })
+  );
+};
+
 
   const addFoodToMeal = (food: Food) => {
   setCustomMealPlan(prev => {
@@ -430,6 +449,41 @@ const MealPlanning: React.FC = () => {
   const totalNutrition = getTotalNutrition();
   const consumedNutrition = getConsumedNutrition();
   const targetCalories = user.dailyCalories;
+
+  // 🔹 Fungsi untuk menghitung total nutrisi dari makanan yang sudah dimakan
+  const getTotalConsumedNutrition = () => {
+  let total = { calories: 0, protein: 0, carbs: 0, fat: 0 };
+
+  // Dari AI recommendation
+  if (Array.isArray(aiMealPlan)) {
+    aiMealPlan.forEach((meal, mealIndex) => {
+      const id = `ai-meal-${mealIndex}-${formatDateKey(currentDate)}`;
+      if (consumedFoods.includes(id) && Array.isArray(meal.items)) {
+        meal.items.forEach((item: any) => {
+          total.calories += item.calories || 0;
+          total.protein += item.protein || 0;
+          total.carbs += item.carbs || 0;
+          total.fat += item.fat || 0;
+        });
+      }
+    });
+  }
+
+  // Dari Atur Makan (custom meal)
+  Object.entries(customMealPlan || {}).forEach(([mealType, foods]: any) => {
+    (foods || []).forEach((food: any) => {
+      const id = `${food.id}-${mealType}-${formatDateKey(currentDate)}`;
+      if (consumedFoods.includes(id)) {
+        total.calories += food.calories || 0;
+        total.protein += food.protein || 0;
+        total.carbs += food.carbs || 0;
+        total.fat += food.fat || 0;
+      }
+    });
+  });
+
+  return total;
+};
 
   const mealTimes = {
     Sarapan: '07:00 - 08:00',

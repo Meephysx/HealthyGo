@@ -110,7 +110,7 @@ Contoh format:
         <div className="flex items-center border border-gray-300 rounded-lg mb-6 overflow-hidden">
           <input
             type="text"
-            placeholder="Cari makanan... contoh: ayam goreng, nasi uduk"
+            placeholder="Cari makanan.."
             className="flex-grow p-3 outline-none"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}

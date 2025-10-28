@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronRight, ChevronLeft, User, Target, Activity } from 'lucide-react';
+import { ChevronRight, ChevronLeft, User, Target, Activity, LogIn } from 'lucide-react';
 import { calculateBMI, calculateIdealWeight, calculateDailyCalories } from '../utils/calculations';
 import { ACTIVITY_LEVELS, DIETARY_RESTRICTIONS, COMMON_ALLERGIES } from '../utils/constants';
 import type { User as UserType } from '../types';
@@ -20,8 +20,11 @@ const Onboarding: React.FC = () => {
     dietaryRestrictions: [] as string[],
     allergies: [] as string[]
   });
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
 
-  const totalSteps = 4;
+  const totalSteps = 5; // Updated to include login step
 
   const handleNext = () => {
     if (currentStep < totalSteps) {
@@ -34,6 +37,20 @@ const Onboarding: React.FC = () => {
   const handlePrevious = () => {
     if (currentStep > 1) {
       setCurrentStep(currentStep - 1);
+    }
+  };
+
+  const handleLogin = () => {
+    const storedUser = localStorage.getItem('user');
+    if (storedUser) {
+      const user: UserType = JSON.parse(storedUser);
+      if (user.email === loginEmail && loginPassword === 'password') { // Simple password check for demo
+        navigate('/dashboard');
+      } else {
+        setLoginError('Invalid email or password');
+      }
+    } else {
+      setLoginError('No account found with this email');
     }
   };
 
@@ -70,12 +87,14 @@ const Onboarding: React.FC = () => {
   const isStepValid = () => {
     switch (currentStep) {
       case 1:
-        return formData.name && formData.email && formData.age && formData.gender;
+        return true; // Login step is optional, can skip
       case 2:
-        return formData.height && formData.weight;
+        return formData.name && formData.email && formData.age && formData.gender;
       case 3:
-        return formData.activityLevel && formData.goal;
+        return formData.height && formData.weight;
       case 4:
+        return formData.activityLevel && formData.goal;
+      case 5:
         return true; // Optional step
       default:
         return false;
@@ -94,6 +113,19 @@ const Onboarding: React.FC = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 flex items-center justify-center p-4">
       <div className="max-w-2xl w-full bg-white rounded-2xl shadow-xl overflow-hidden">
+          {/* Background Logo Transparan */}
+        <img
+          src="/img/logo.jpg" // ubah sesuai lokasi file logomu
+          alt="Logo Background"
+          className="absolute opacity-10 w-[500px] h-[500px] object-contain z-0 select-none pointer-events-none"
+          style={{
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            filter: "blur(1px)",
+          }}
+        />
+
         {/* Progress Bar */}
         <div className="bg-gradient-to-r from-green-600 to-blue-600 p-6">
           <div className="flex items-center justify-between text-white mb-4">
@@ -110,6 +142,51 @@ const Onboarding: React.FC = () => {
 
         <div className="p-8">
           {currentStep === 1 && (
+            <div className="space-y-6">
+              <div className="text-center mb-8">
+                <LogIn className="h-12 w-12 text-green-600 mx-auto mb-4" />
+                <h2 className="text-3xl font-bold text-gray-900 mb-2">Welcome Back</h2>
+                <p className="text-gray-600">Login to your account or skip to create a new one</p>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
+                  <input
+                    type="email"
+                    value={loginEmail}
+                    onChange={(e) => setLoginEmail(e.target.value)}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                    placeholder="Enter your email"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Password</label>
+                  <input
+                    type="password"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                    placeholder="Enter your password"
+                  />
+                </div>
+
+                {loginError && (
+                  <p className="text-red-600 text-sm">{loginError}</p>
+                )}
+
+                <button
+                  onClick={handleLogin}
+                  className="w-full px-8 py-3 bg-gradient-to-r from-green-600 to-blue-600 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200"
+                >
+                  Login
+                </button>
+              </div>
+            </div>
+          )}
+
+          {currentStep === 2 && (
             <div className="space-y-6">
               <div className="text-center mb-8">
                 <User className="h-12 w-12 text-green-600 mx-auto mb-4" />
@@ -169,7 +246,7 @@ const Onboarding: React.FC = () => {
             </div>
           )}
 
-          {currentStep === 2 && (
+          {currentStep === 3 && (
             <div className="space-y-6">
               <div className="text-center mb-8">
                 <Activity className="h-12 w-12 text-green-600 mx-auto mb-4" />
@@ -216,7 +293,7 @@ const Onboarding: React.FC = () => {
             </div>
           )}
 
-          {currentStep === 3 && (
+          {currentStep === 4 && (
             <div className="space-y-6">
               <div className="text-center mb-8">
                 <Target className="h-12 w-12 text-green-600 mx-auto mb-4" />
@@ -274,7 +351,7 @@ const Onboarding: React.FC = () => {
             </div>
           )}
 
-          {currentStep === 4 && (
+          {currentStep === 5 && (
             <div className="space-y-6">
               <div className="text-center mb-8">
                 <h2 className="text-3xl font-bold text-gray-900 mb-2">Dietary Preferences</h2>
