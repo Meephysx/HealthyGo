@@ -23,6 +23,8 @@ const Onboarding: React.FC = () => {
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
+  const [isRegister, setIsRegister] = useState(false);
+
 
   const totalSteps = 5; // Updated to include login step
 
@@ -40,19 +42,60 @@ const Onboarding: React.FC = () => {
     }
   };
 
-  const handleLogin = () => {
-    const storedUser = localStorage.getItem('user');
-    if (storedUser) {
-      const user: UserType = JSON.parse(storedUser);
-      if (user.email === loginEmail && loginPassword === 'password') { // Simple password check for demo
-        navigate('/dashboard');
-      } else {
-        setLoginError('Invalid email or password');
-      }
+  const handleLogin = async () => {
+  try {
+    const res = await fetch("http://localhost:5000/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      localStorage.setItem("token", data.token);
+      localStorage.setItem("user", JSON.stringify(data.user));
+      navigate("/dashboard");
     } else {
-      setLoginError('No account found with this email');
+      setLoginError(data.message);
     }
-  };
+  } catch (err) {
+    setLoginError("Server error");
+  }
+};
+
+  const handleRegister = async () => {
+  if (!loginEmail || !loginPassword || !formData.name) {
+    setLoginError("Please fill in all fields");
+    return;
+  }
+
+  try {
+    const res = await fetch("http://localhost:5000/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: formData.name,
+        email: loginEmail,
+        password: loginPassword,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (res.ok) {
+      // Simpan token dan data user ke localStorage
+      localStorage.setItem("token", data.token);
+      localStorage.setItem("user", JSON.stringify(data.user));
+
+      alert("Registration successful!");
+      navigate("/dashboard");
+    } else {
+      setLoginError(data.message || "Registration failed");
+    }
+  } catch (err) {
+    console.error("Error during registration:", err);
+    setLoginError("Server error");
+  }
+};
 
   const handleComplete = () => {
     const user: UserType = {
@@ -142,49 +185,89 @@ const Onboarding: React.FC = () => {
 
         <div className="p-8">
           {currentStep === 1 && (
-            <div className="space-y-6">
-              <div className="text-center mb-8">
-                <LogIn className="h-12 w-12 text-green-600 mx-auto mb-4" />
-                <h2 className="text-3xl font-bold text-gray-900 mb-2">Welcome Back</h2>
-                <p className="text-gray-600">Login to your account or skip to create a new one</p>
-              </div>
+  <div className="space-y-6">
+    <div className="text-center mb-8">
+      <LogIn className="h-12 w-12 text-green-600 mx-auto mb-4" />
+      <h2 className="text-3xl font-bold text-gray-900 mb-2">
+        {isRegister ? 'Create Account' : 'Welcome Back'}
+      </h2>
+      <p className="text-gray-600">
+        {isRegister ? 'Register to get started' : 'Login to your account or create a new one'}
+      </p>
+    </div>
 
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
-                  <input
-                    type="email"
-                    value={loginEmail}
-                    onChange={(e) => setLoginEmail(e.target.value)}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
-                    placeholder="Enter your email"
-                  />
-                </div>
+    <div className="space-y-4">
+      {isRegister && (
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Full Name</label>
+          <input
+            type="text"
+            value={formData.name}
+            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+            placeholder="Enter your full name"
+          />
+        </div>
+      )}
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Password</label>
-                  <input
-                    type="password"
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
-                    placeholder="Enter your password"
-                  />
-                </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
+        <input
+          type="email"
+          value={loginEmail}
+          onChange={(e) => setLoginEmail(e.target.value)}
+          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+          placeholder="Enter your email"
+        />
+      </div>
 
-                {loginError && (
-                  <p className="text-red-600 text-sm">{loginError}</p>
-                )}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">Password</label>
+        <input
+          type="password"
+          value={loginPassword}
+          onChange={(e) => setLoginPassword(e.target.value)}
+          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+          placeholder="Enter your password"
+        />
+      </div>
 
-                <button
-                  onClick={handleLogin}
-                  className="w-full px-8 py-3 bg-gradient-to-r from-green-600 to-blue-600 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200"
-                >
-                  Login
-                </button>
-              </div>
-            </div>
-          )}
+      {loginError && <p className="text-red-600 text-sm">{loginError}</p>}
+
+      <button
+        onClick ={isRegister ? handleRegister : handleLogin}
+        className="w-full px-8 py-3 bg-gradient-to-r from-green-600 to-blue-600 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200"
+      >
+        {isRegister ? 'Register' : 'Login'}
+      </button>
+
+      <p className="text-center text-sm text-gray-600 mt-4">
+        {isRegister ? (
+          <>
+            Already have an account?{' '}
+            <span
+              onClick={() => setIsRegister(false)}
+              className="text-green-600 cursor-pointer font-semibold hover:underline"
+            >
+              Login
+            </span>
+          </>
+        ) : (
+          <>
+            Don’t have an account?{' '}
+            <span
+              onClick={() => setIsRegister(true)}
+              className="text-green-600 cursor-pointer font-semibold hover:underline"
+            >
+              Register
+            </span>
+          </>
+        )}
+      </p>
+    </div>
+  </div>
+)}
+
 
           {currentStep === 2 && (
             <div className="space-y-6">

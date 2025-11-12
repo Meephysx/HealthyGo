@@ -28,7 +28,7 @@ const Navigation: React.FC = () => {
         <div className="flex justify-between items-center h-16">
           <Link to="/dashboard" className="flex items-center space-x-2">
             <Heart className="h-8 w-8 text-green-600" />
-            <span className="text-xl font-bold text-gray-900">HealtyGO</span>
+            <span className="text-xl font-bold text-gray-900">HealthyGO</span>
           </Link>
           
           <div className="hidden md:flex space-x-8">

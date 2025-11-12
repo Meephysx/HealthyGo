@@ -13,6 +13,7 @@ import BurpeeExerciseAnim from "../animations/Burpee.json";
 import supermanAnim from "../animations/superman.json";
 import glutebridgeAnim from "../animations/glutebridge.json";
 import CrunchesAnim from "../animations/Crunches.json";
+import situpAnim from "../animations/situp.json";
 
 
 interface WorkoutPlan {
@@ -44,6 +45,7 @@ const AIWorkoutAnimated: React.FC = () => {
     if (lower.includes("superman")) return supermanAnim;
     if (lower.includes("glute bridge")) return glutebridgeAnim;
     if (lower.includes("crunches")) return CrunchesAnim;
+    if (lower.includes("situp")) return situpAnim;
     return null;
   };
 
@@ -78,7 +80,7 @@ const AIWorkoutAnimated: React.FC = () => {
 
   // 🔹 Prompt AI yang menyesuaikan dengan profil pengguna (mirip Meal Planning)
   const prompt = `
-Sebagai pelatih kebugaran AI profesional, buatkan rencana latihan dirumah tanpa alat lengkap untuk 1 hari penuh berdasarkan profil pengguna berikut:
+Sebagai pelatih kebugaran AI profesional, buatkan rencana latihan dirumah tanpa alat lengkap untuk 1 hari penuh dan sertakan pula jumlah kalori yang sudah terbakar setelah melakukan olahraga tersebut, berdasarkan profil pengguna berikut:
 
 PROFIL PENGGUNA:
 - Berat badan: ${user.weight} kg
