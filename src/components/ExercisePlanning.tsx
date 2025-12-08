@@ -75,7 +75,7 @@ const AIWorkoutAnimated: React.FC = () => {
     dailyCalories: 2500,
   };
 
-  const apiKey = "AIzaSyAtFPZ9ZMr350lAx7Mg8u6CnI95dHBdvK4";
+  const apiKey = "AIzaSyBAa_N53ic0rib9KCLgfDZBSlvDwjmaOQY";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
   // 🔹 Prompt AI yang menyesuaikan dengan profil pengguna (mirip Meal Planning)

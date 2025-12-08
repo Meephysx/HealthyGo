@@ -81,3 +81,4 @@ export interface ProgressEntry {
   };
   notes?: string;
 }
+
