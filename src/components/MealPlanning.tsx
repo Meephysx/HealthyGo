@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Clock, ChevronLeft, ChevronRight, Check, Sparkles, Info, Loader, RefreshCw, X } from 'lucide-react';
+import { Plus, ChevronLeft, ChevronRight, Check, Sparkles, Info, Loader, RefreshCw, X } from 'lucide-react';
 import { useNutrition } from '../context/NutritionContext';
 import AISearch from './FoodSearch';
 
@@ -45,15 +45,15 @@ interface AIMealPlan {
 type MealType = 'Sarapan' | 'MakanSiang' | 'MakanMalam' | 'snacks';
 
 const MealPlanning: React.FC = () => {
-  // User state
-  const [user] = useState<User>({
+  // 1. UPDATE: State User diinisialisasi dengan default, tapi nanti ditimpa oleh localStorage
+  const [user, setUser] = useState<User>({
     weight: 70,
     height: 170,
     age: 25,
     gender: 'male',
     goal: 'maintain-weight',
     activityLevel: 'moderate',
-    dailyCalories: 2200
+    dailyCalories: 2000 // Default fallback
   });
 
   // Core states
@@ -76,7 +76,7 @@ const MealPlanning: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   
   // Nutrition Context
-  const { updateNutrition, nutrition: todayNutrition } = useNutrition();
+  const { updateNutrition } = useNutrition();
 
   // Sample foods data
   const SAMPLE_FOODS: Food[] = [
@@ -136,6 +136,19 @@ const MealPlanning: React.FC = () => {
     return formatDateKey(currentDate);
   };
 
+  // 2. NEW: Effect untuk mengambil data User dari LocalStorage saat komponen dimuat
+  useEffect(() => {
+    const storedUser = localStorage.getItem('user');
+    if (storedUser) {
+      try {
+        const parsedUser = JSON.parse(storedUser);
+        setUser(parsedUser);
+      } catch (error) {
+        console.error("Gagal memparsing data user:", error);
+      }
+    }
+  }, []);
+
   // Load consumed foods on component mount or date change
   useEffect(() => {
     const dateKey = getCurrentDateKey();
@@ -143,176 +156,122 @@ const MealPlanning: React.FC = () => {
     setConsumedFoods(savedConsumed);
   }, [currentDate]);
 
-  // Update NutritionContext whenever consumption changes
-  useEffect(() => {
-    const consumedNutrition = getConsumedNutrition();
-    updateNutrition({
-      calories: consumedNutrition.calories,
-      protein: consumedNutrition.protein,
-      carbs: consumedNutrition.carbs,
-      fat: consumedNutrition.fat,
-      date: getCurrentDateKey()
-    });
-  }, [consumedFoods, currentDate, aiMealPlan, customMealPlan, showAiRecommendations]);
-
   // AI Meal Plan Generation
   const generateAIMealPlan = async (): Promise<void> => {
     setIsLoadingAI(true);
     setAiError(null);
-    
-    const apiKey = "AIzaSyB0qggp5SxQhUIW5r9WuwoU21IwJbdnY78"; 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-
+  
+    const apiKey = "Ysk-ai-v1-33c26edc132db1af13acf15fa5c1318faa5bf48e9b97bfdeabf94b6ffd27fc6b"; 
+    const url = "https://api.zenmux.com/v1/chat/completions";
+  
     const prompt = `Sebagai ahli nutrisi AI, buatkan rencana makan sehat dan lengkap untuk 1 hari penuh dengan profil pengguna berikut:
+  
+  PROFIL PENGGUNA:
+  - Berat badan: ${user.weight} kg
+  - Tinggi badan: ${user.height} cm  
+  - Usia: ${user.age} tahun
+  - Jenis kelamin: ${user.gender}
+  - Tujuan fitness: ${user.goal}
+  - Tingkat aktivitas: ${user.activityLevel}
+  - Target kalori harian: ${user.dailyCalories} kcal
+  
+  INSTRUKSI:
+  1. Buat menu menggunakan makanan Indonesia yang mudah didapat dimana saja
+  2. Pastikan distribusi kalori seimbang (sarapan 25%, makansiang 35%, makan malam 30%, sisanya snack)
+  3. Sesuaikan dengan tujuan fitness pengguna
+  4. Berikan penjelasan mengapa menu tersebut cocok untuk profil pengguna
+  5. Sertakan estimasi porsi yang realistis
+  
+  FORMAT OUTPUT (JSON saja tanpa teks tambahan):
+  {
+    "Sarapan": {
+      "menu": "Menu sarapan lengkap",
+      "calories": 550,
+      "time": "07:00 - 08:00",
+      "reasoning": "Penjelasan kenapa menu ini cocok",
+      "portions": "Ukuran porsi detail"
+    },
+    "MakanSiang": {
+      "menu": "Menu makansiang lengkap",
+      "calories": 770,
+      "time": "12:00 - 13:00", 
+      "reasoning": "Penjelasan kenapa menu ini cocok",
+      "portions": "Ukuran porsi detail"
+    },
+    "MakanMalam": {
+      "menu": "Menu makan malam lengkap",
+      "calories": 660,
+      "time": "18:00 - 19:00",
+      "reasoning": "Penjelasan kenapa menu ini cocok", 
+      "portions": "Ukuran porsi detail"
+    },
+    "snacks": {
+      "menu": "Snack sehat",
+      "calories": 220,
+      "time": "15:00 - 16:00",
+      "reasoning": "Penjelasan kenapa snack ini cocok",
+      "portions": "Ukuran porsi snack"
+    },
+    "totalCalories": ${user.dailyCalories},
+    "nutritionTips": "Tips nutrisi khusus",
+    "hydrationGoal": "Target minum air per hari"
+  }`;
+  
+  
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "google/gemini-1.5-flash",
+        messages: [
+          { role: "user", content: prompt }
+        ],
+      }),
+    });
 
-PROFIL PENGGUNA:
-- Berat badan: ${user.weight} kg
-- Tinggi badan: ${user.height} cm  
-- Usia: ${user.age} tahun
-- Jenis kelamin: ${user.gender}
-- Tujuan fitness: ${user.goal}
-- Tingkat aktivitas: ${user.activityLevel}
-- Target kalori harian: ${user.dailyCalories} kcal
-
-INSTRUKSI:
-1. Buat menu menggunakan makanan Indonesia yang mudah didapat dimana saja
-2. Pastikan distribusi kalori seimbang (sarapan 25%, makansiang 35%, makan malam 30%, sisanya snack)
-3. Sesuaikan dengan tujuan fitness pengguna
-4. Berikan penjelasan mengapa menu tersebut cocok untuk profil pengguna
-5. Sertakan estimasi porsi yang realistis
-
-FORMAT OUTPUT (JSON saja tanpa teks tambahan):
-{
-  "Sarapan": {
-    "menu": "Menu sarapan lengkap",
-    "calories": 550,
-    "time": "07:00 - 08:00",
-    "reasoning": "Penjelasan kenapa menu ini cocok",
-    "portions": "Ukuran porsi detail"
-  },
-  "MakanSiang": {
-    "menu": "Menu makansiang lengkap",
-    "calories": 770,
-    "time": "12:00 - 13:00", 
-    "reasoning": "Penjelasan kenapa menu ini cocok",
-    "portions": "Ukuran porsi detail"
-  },
-  "MakanMalam": {
-    "menu": "Menu makan malam lengkap",
-    "calories": 660,
-    "time": "18:00 - 19:00",
-    "reasoning": "Penjelasan kenapa menu ini cocok", 
-    "portions": "Ukuran porsi detail"
-  },
-  "snacks": {
-    "menu": "Snack sehat",
-    "calories": 220,
-    "time": "15:00 - 16:00",
-    "reasoning": "Penjelasan kenapa snack ini cocok",
-    "portions": "Ukuran porsi snack"
-  },
-  "totalCalories": ${user.dailyCalories},
-  "nutritionTips": "Tips nutrisi khusus",
-  "hydrationGoal": "Target minum air per hari"
-}`;
-
-    const body = {
-      contents: [{ parts: [{ text: prompt }] }]
-    };
-
-    try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      
-      if (!text) {
-        throw new Error("Tidak ada respon dari AI");
-      }
-      
-      // Clean and parse JSON
-      let cleanedText = text.trim();
-      
-      // Remove markdown code blocks
-      cleanedText = cleanedText.replace(/```json\s*\n?/, '').replace(/\n?\s*```/, '');
-      cleanedText = cleanedText.replace(/```\s*\n?/, '').replace(/\n?\s*```/, '');
-      
-      // Find JSON object
-      const jsonStart = cleanedText.indexOf('{');
-      const jsonEnd = cleanedText.lastIndexOf('}');
-      
-      if (jsonStart !== -1 && jsonEnd !== -1) {
-        cleanedText = cleanedText.substring(jsonStart, jsonEnd + 1);
-      }
-      
-      const mealPlan: AIMealPlan = JSON.parse(cleanedText);
-      
-      // Validate required fields
-      if (!mealPlan.Sarapan || !mealPlan.MakanSiang || !mealPlan.MakanMalam) {
-        throw new Error("Struktur rencana makan tidak valid");
-      }
-      
-      setAiMealPlan(mealPlan);
-      
-    } catch (error) {
-      console.error('Error generating AI meal plan:', error);
-      
-      // Fallback meal plan
-      const fallbackPlan: AIMealPlan = {
-        Sarapan: {
-          menu: "Oatmeal dengan buah pisang dan madu",
-          calories: Math.round(user.dailyCalories * 0.25),
-          time: "07:00 - 08:00",
-          reasoning: "Memberikan energi tahan lama untuk memulai hari dengan serat dan karbohidrat kompleks",
-          portions: "1 mangkuk oatmeal + 1 buah pisang sedang + 1 sdm madu"
-        },
-        MakanSiang: {
-          menu: "Nasi merah dengan ayam bakar dan sayur bayam",
-          calories: Math.round(user.dailyCalories * 0.35),
-          time: "12:00 - 13:00",
-          reasoning: "Kombinasi protein tinggi dan karbohidrat kompleks untuk energi siang hari",
-          portions: "1 piring nasi merah + 100g dada ayam + 1 mangkuk sayur bayam"
-        },
-        MakanMalam: {
-          menu: "Ikan salmon panggang dengan kentang rebus dan brokoli",
-          calories: Math.round(user.dailyCalories * 0.30),
-          time: "18:00 - 19:00",
-          reasoning: "Protein berkualitas tinggi dan omega-3 untuk pemulihan otot malam hari",
-          portions: "150g ikan salmon + 200g kentang rebus + 1 mangkuk brokoli"
-        },
-        snacks: {
-          menu: "Greek yogurt dengan kacang almond",
-          calories: Math.round(user.dailyCalories * 0.10),
-          time: "15:00 - 16:00",
-          reasoning: "Protein dan lemak sehat untuk mengatasi lapar sore",
-          portions: "1 cup Greek yogurt + 10 butir kacang almond"
-        },
-        totalCalories: user.dailyCalories,
-        nutritionTips: "Pastikan minum air putih 8-10 gelas per hari",
-        hydrationGoal: "2.5 liter air per hari"
-      };
-      
-      setAiMealPlan(fallbackPlan);
-      setAiError("Tidak terhubung ke jaringan. Cek koneksi anda kembali!");
-    } finally {
-      setIsLoadingAI(false);
+    if (!response.ok) {
+      console.error("Zenmux Error:", await response.text());
+      throw new Error(`Zenmux returned status ${response.status}`);
     }
-  };
 
-  // Load AI meal plan on mount
+    const data = await response.json();
+
+    // ZenMux style
+    const text = data?.choices?.[0]?.message?.content;
+    if (!text) throw new Error("Empty response from AI");
+
+    // Remove markdown fences
+    let cleaned = text.replace(/```json|```/g, "").trim();
+
+    // Extract JSON only
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    cleaned = cleaned.substring(start, end + 1);
+
+    const result = JSON.parse(cleaned);
+
+    setAiMealPlan(result);
+
+  } catch (err) {
+    console.error("Meal plan AI error:", err);
+    setAiError("Server error. AI gagal memproses menu.");
+  } finally {
+    setIsLoadingAI(false);
+  }
+};
+  
+
+  // 3. UPDATE: Tambahkan 'user.dailyCalories' ke dependency array
+  // Ini memastikan saat user data dimuat dari localStorage, AI akan membuat plan baru sesuai kalori user
   useEffect(() => {
     if (showAiRecommendations) {
       generateAIMealPlan();
     }
-  }, [currentDate, showAiRecommendations]);
+  }, [currentDate, showAiRecommendations, user.dailyCalories]); 
 
   // Food Consumption Logic
   const getFoodUniqueId = (foodId: string, mealType: string): string => {
@@ -335,59 +294,13 @@ FORMAT OUTPUT (JSON saja tanpa teks tambahan):
       : [...consumedFoods, uniqueId];
 
     setConsumedFoods(newConsumed);
-    
-    // Save to localStorage
     localStorage.setItem(`consumed-${getCurrentDateKey()}`, JSON.stringify(newConsumed));
-  };
-
-  // Custom Meal Plan Functions
-  const addFoodToMeal = (food: Food): void => {
-    setCustomMealPlan(prev => ({
-      ...prev,
-      [selectedMeal]: [...prev[selectedMeal], food]
-    }));
-  };
-
-  const removeFoodFromMeal = (foodId: string, mealType: MealType): void => {
-    setCustomMealPlan(prev => ({
-      ...prev,
-      [mealType]: prev[mealType].filter(food => food.id !== foodId)
-    }));
-  };
-
-  // Nutrition Calculation Functions
-  const getTotalNutrition = () => {
-    if (showAiRecommendations && aiMealPlan) {
-      const totalCalories = aiMealPlan.totalCalories;
-      return {
-        calories: totalCalories,
-        protein: Math.round(totalCalories * 0.25 / 4), // 25% protein
-        carbs: Math.round(totalCalories * 0.45 / 4),   // 45% carbs
-        fat: Math.round(totalCalories * 0.30 / 9)      // 30% fat
-      };
-    }
-    
-    // Calculate from custom meal plan
-    const allFoods = [
-      ...customMealPlan.Sarapan,
-      ...customMealPlan.MakanSiang,
-      ...customMealPlan.MakanMalam,
-      ...customMealPlan.snacks
-    ];
-    
-    return allFoods.reduce((total, food) => ({
-      calories: total.calories + food.calories,
-      protein: total.protein + food.protein,
-      carbs: total.carbs + food.carbs,
-      fat: total.fat + food.fat
-    }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
   };
 
   const getConsumedNutrition = () => {
     let totalNutrition = { calories: 0, protein: 0, carbs: 0, fat: 0 };
     
     if (showAiRecommendations && aiMealPlan) {
-      // Calculate from AI meals
       const aiMeals: { type: MealType; meal: AIMeal }[] = [
         { type: 'Sarapan', meal: aiMealPlan.Sarapan },
         { type: 'MakanSiang', meal: aiMealPlan.MakanSiang },
@@ -407,7 +320,6 @@ FORMAT OUTPUT (JSON saja tanpa teks tambahan):
         }
       });
     } else {
-      // Calculate from custom meals
       Object.entries(customMealPlan).forEach(([mealType, foods]) => {
         foods.forEach(food => {
           if (isFoodConsumed(food.id, mealType)) {
@@ -419,11 +331,61 @@ FORMAT OUTPUT (JSON saja tanpa teks tambahan):
         });
       });
     }
-    
     return totalNutrition;
   };
 
-  // Date Navigation
+  // Update NutritionContext
+  useEffect(() => {
+    const consumedNutrition = getConsumedNutrition();
+    updateNutrition({
+      calories: consumedNutrition.calories,
+      protein: consumedNutrition.protein,
+      carbs: consumedNutrition.carbs,
+      fat: consumedNutrition.fat,
+      date: getCurrentDateKey()
+    });
+  }, [consumedFoods, currentDate, aiMealPlan, customMealPlan, showAiRecommendations]);
+
+  const addFoodToMeal = (food: Food): void => {
+    setCustomMealPlan(prev => ({
+      ...prev,
+      [selectedMeal]: [...prev[selectedMeal], food]
+    }));
+  };
+
+  const removeFoodFromMeal = (foodId: string, mealType: MealType): void => {
+    setCustomMealPlan(prev => ({
+      ...prev,
+      [mealType]: prev[mealType].filter(food => food.id !== foodId)
+    }));
+  };
+
+  const getTotalNutrition = () => {
+    if (showAiRecommendations && aiMealPlan) {
+      const totalCalories = aiMealPlan.totalCalories;
+      return {
+        calories: totalCalories,
+        protein: Math.round(totalCalories * 0.25 / 4),
+        carbs: Math.round(totalCalories * 0.45 / 4),
+        fat: Math.round(totalCalories * 0.30 / 9)
+      };
+    }
+    
+    const allFoods = [
+      ...customMealPlan.Sarapan,
+      ...customMealPlan.MakanSiang,
+      ...customMealPlan.MakanMalam,
+      ...customMealPlan.snacks
+    ];
+    
+    return allFoods.reduce((total, food) => ({
+      calories: total.calories + food.calories,
+      protein: total.protein + food.protein,
+      carbs: total.carbs + food.carbs,
+      fat: total.fat + food.fat
+    }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
+  };
+
   const previousDay = (): void => {
     setCurrentDate(prev => new Date(prev.getTime() - 24 * 60 * 60 * 1000));
   };
@@ -432,7 +394,6 @@ FORMAT OUTPUT (JSON saja tanpa teks tambahan):
     setCurrentDate(prev => new Date(prev.getTime() + 24 * 60 * 60 * 1000));
   };
 
-  // Meal Times and Icons
   const mealTimes = {
     Sarapan: '07:00 - 08:00',
     MakanSiang: '12:00 - 13:00',
@@ -447,15 +408,15 @@ FORMAT OUTPUT (JSON saja tanpa teks tambahan):
     snacks: '🍎'
   };
 
-  // Filter foods for search
   const filteredFoods = SAMPLE_FOODS.filter(food =>
     food.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Calculate nutrition values
   const totalNutrition = getTotalNutrition();
   const consumedNutrition = getConsumedNutrition();
-  const targetCalories = user.dailyCalories;
+  
+  // 4. UPDATE: Menggunakan user.dailyCalories (yang sudah di-update dari localStorage)
+  const targetCalories = user.dailyCalories; 
   const remainingCalories = Math.max(0, targetCalories - consumedNutrition.calories);
   const calorieProgress = Math.min(100, (consumedNutrition.calories / targetCalories) * 100);
 
