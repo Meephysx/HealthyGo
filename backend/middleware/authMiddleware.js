@@ -1,14 +1,18 @@
-import jwt from "jsonwebtoken";
+// middleware/authMiddleware.js
+const admin = require('../firebase/firebaseAdmin');
 
-export const protect = (req, res, next) => {
-  const token = req.headers.authorization?.split(" ")[1];
-  if (!token) return res.status(401).json({ message: "No token, authorization denied" });
+const verifyToken = async (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1]; // "Bearer <token>"
+
+  if (!token) return res.status(401).json({ message: 'Token tidak ditemukan' });
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
+    const decoded = await admin.auth().verifyIdToken(token);
+    req.user = decoded; // menyimpan data user ke request
     next();
-  } catch (err) {
-    res.status(401).json({ message: "Token invalid" });
+  } catch (error) {
+    res.status(403).json({ message: 'Token tidak valid', error });
   }
 };
+
+module.exports = verifyToken;
