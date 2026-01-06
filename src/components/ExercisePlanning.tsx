@@ -6,14 +6,13 @@ import Lottie from "lottie-react";
 import pushupAnim from "../animations/Military Push Ups.json";
 import plankAnim from "../animations/plank.json";
 import squatAnim from "../animations/squat.json";
-//import situpAnim from "../animations/situp.json";
+import situpAnim from "../animations/situp.json";
 import jumpingjackAnim from "../animations/jumpingjack.json";
 import lungeAnim from "../animations/lunge.json";
 import BurpeeExerciseAnim from "../animations/Burpee.json";
 import supermanAnim from "../animations/superman.json";
 import glutebridgeAnim from "../animations/glutebridge.json";
 import CrunchesAnim from "../animations/Crunches.json";
-import situpAnim from "../animations/situp.json";
 
 
 interface WorkoutPlan {
