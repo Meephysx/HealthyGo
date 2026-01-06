@@ -1,6 +1,6 @@
 import React from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
-import { auth } from "./components/firebase"; 
+import { auth } from "./firebase"; 
 import { NutritionProvider } from "./context/NutritionContext";
 
 import Navigation from "./components/Navigation";

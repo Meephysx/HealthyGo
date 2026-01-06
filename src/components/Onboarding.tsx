@@ -1,26 +1,40 @@
 import React, { useState, useEffect } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
+
+// Icons
 import {
   ChevronRight,
   ChevronLeft,
   User,
   Target,
-  Activity,
   LogIn,
 } from "lucide-react";
+
+// Utils
 import {
   calculateBMI,
   calculateIdealWeight,
   calculateDailyCalories,
 } from "../utils/calculations";
+
 import {
   ACTIVITY_LEVELS,
   DIETARY_RESTRICTIONS,
   COMMON_ALLERGIES,
 } from "../utils/constants";
 
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
-import { auth } from "./firebase";
+// Firebase core
+import { auth, db } from "../firebase";
+
+// Firebase auth
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+} from "firebase/auth";
+
+// Firebase database
+// Tambahkan 'update' di sini
+import { ref, get, set, update } from "firebase/database"; 
 
 const Onboarding: React.FC = () => {
   const navigate = useNavigate();
@@ -55,130 +69,149 @@ const Onboarding: React.FC = () => {
 
   // ==== LOGIN ====
   const handleLogin = async () => {
-  try {
-    const userCred = await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
-    const idToken = await userCred.user.getIdToken();
+    try {
+      setLoginError(""); // Reset error
+      const userCred = await signInWithEmailAndPassword(
+        auth,
+        loginEmail,
+        loginPassword
+      );
 
-    const res = await fetch("http://localhost:5000/api/users/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ idToken }),
-    });
+      const user = userCred.user;
 
-    const data = await res.json();
-    if (!res.ok) {
-      setLoginError(data.message || "Login failed");
-      return;
+      // AMBIL DATA USER DARI REALTIME DB
+      const snapshot = await get(ref(db, "users/" + user.uid));
+      
+      // Jika data tidak ada di database (misal user lama atau error saat register)
+      if (!snapshot.exists()) {
+        // Opsi: Arahkan ke pengisian profil jika data kosong
+        // setLoginError("Data profil belum lengkap, silakan register ulang atau hubungi admin.");
+        // Atau paksa isi data:
+        // setIsRegister(true); 
+        // setCurrentStep(2);
+        // return;
+        
+        // Untuk sekarang kita biarkan, tapi beri object kosong agar tidak error
+        console.warn("User data not found in DB");
+      }
+
+      const userData = snapshot.exists() ? snapshot.val() : {};
+      const token = await user.getIdToken();
+
+      localStorage.setItem("token", token);
+      
+      // Gabungkan data auth dan data dari DB untuk localStorage
+      localStorage.setItem("user", JSON.stringify({
+        uid: user.uid,
+        email: user.email,
+        ...userData // Spread data dari database (fullname, bmi, dll)
+      }));
+
+      navigate("/dashboard");
+    } catch (err: any) {
+      console.error("Login Error:", err);
+      setLoginError("Login gagal: " + (err.message || "Unknown error"));
     }
-
-    localStorage.setItem("token", idToken);
-    localStorage.setItem("user", JSON.stringify(data.user));
-
-    navigate("/dashboard");
-
-  } catch (err: any) {
-    setLoginError("Login gagal: " + err.message);
-  }
-};
+  };
 
   // ==== REGISTER ====
   const handleRegister = async () => {
-  try {
-    const userCred = await createUserWithEmailAndPassword(auth, loginEmail, loginPassword);
-    const idToken = await userCred.user.getIdToken();
+    try {
+      setLoginError("");
+      const userCred = await createUserWithEmailAndPassword(
+        auth,
+        loginEmail,
+        loginPassword
+      );
 
-    const res = await fetch("http://localhost:5000/api/users/register", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      const user = userCred.user;
+
+      // SIMPAN DATA AWAL KE FIREBASE REALTIME DATABASE
+      const initialData = {
         fullname: formData.name,
-        email: loginEmail,
-        password: loginPassword,
-        idToken
-      }),
-    });
+        email: user.email,
+        createdAt: Date.now(),
+      };
 
-    const data = await res.json();
-    if (!res.ok) {
-      setLoginError(data.message || "Registration failed");
+      await set(ref(db, "users/" + user.uid), initialData);
+
+      const token = await user.getIdToken();
+
+      localStorage.setItem("token", token);
+      localStorage.setItem("user", JSON.stringify({
+        uid: user.uid,
+        ...initialData
+      }));
+
+      setCurrentStep(2);
+    } catch (err: any) {
+      console.error("Register Error:", err);
+      setLoginError("Register gagal: " + err.message);
+    }
+  };
+
+  // ==== FINAL SUBMIT (UPDATED) ====
+  const handleComplete = async () => {
+    const user = auth.currentUser;
+    if (!user) {
+      alert("User not logged in");
       return;
     }
 
-    localStorage.setItem("token", idToken);
-    localStorage.setItem("user", JSON.stringify(data.user));
+    try {
+      // Validasi dan parsing angka dengan fallback
+      const age = parseInt(formData.age) || 0;
+      const height = parseInt(formData.height) || 0;
+      const weight = parseInt(formData.weight) || 0;
 
-    setCurrentStep(2);
-
-  } catch (err: any) {
-    setLoginError("Register gagal: " + err.message);
-  }
-};
-
-
-  // ==== FINAL SUBMIT ====
- const handleComplete = async () => {
-  const user = auth.currentUser;
-  if (!user) {
-    alert("User not logged in");
-    return;
-  }
-
-  try {
-    const idToken = await user.getIdToken();
-
-    // Validasi dan parsing angka dengan fallback
-    const age = parseInt(formData.age) || 0;
-    const height = parseInt(formData.height) || 0;
-    const weight = parseInt(formData.weight) || 0;
-
-    const payload = {
-      name: formData.name || "",
-      age,
-      gender: formData.gender || "",
-      height,
-      weight,
-      activityLevel: formData.activityLevel || "",
-      goal: formData.goal || "",
-      dietaryRestrictions: formData.dietaryRestrictions || [],
-      allergies: formData.allergies || [],
-      bmi: calculateBMI(weight, height),
-      idealWeight: calculateIdealWeight(height, formData.gender as "male" | "female"),
-      dailyCalories: calculateDailyCalories(
+      // Hitung data kesehatan
+      const bmi = calculateBMI(weight, height);
+      const idealWeight = calculateIdealWeight(height, formData.gender as "male" | "female");
+      const dailyCalories = calculateDailyCalories(
         weight,
         height,
         age,
         formData.gender as "male" | "female",
         formData.activityLevel,
         formData.goal
-      ),
-    };
+      );
 
-    const res = await fetch("http://localhost:5000/api/users/update-profile", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${idToken}`,
-      },
-      body: JSON.stringify(payload),
-    });
+      // Siapkan payload lengkap
+      const payload = {
+        fullname: formData.name || "", // Pastikan key konsisten (fullname vs name)
+        age,
+        gender: formData.gender || "",
+        height,
+        weight,
+        activityLevel: formData.activityLevel || "",
+        goal: formData.goal || "",
+        dietaryRestrictions: formData.dietaryRestrictions || [],
+        allergies: formData.allergies || [],
+        bmi,
+        idealWeight,
+        dailyCalories,
+        updatedAt: Date.now()
+      };
 
-    const data = await res.json();
+      // === PERBAIKAN: UPDATE LANGSUNG KE FIREBASE ===
+      // Jangan gunakan fetch ke localhost:5000 lagi
+      await update(ref(db, "users/" + user.uid), payload);
 
-    if (!res.ok) {
-      return alert(data.message || "Failed to update profile");
+      // Update LocalStorage agar Dashboard langsung dapat data terbaru
+      const currentUserLocal = JSON.parse(localStorage.getItem("user") || "{}");
+      localStorage.setItem("user", JSON.stringify({
+        ...currentUserLocal,
+        ...payload
+      }));
+
+      alert("Profile updated successfully!");
+      navigate("/dashboard"); 
+
+    } catch (err: any) {
+      console.error("HandleComplete Error:", err);
+      alert("Gagal menyimpan data ke Firebase: " + (err.message || "Unknown error"));
     }
-
-    localStorage.setItem("user", JSON.stringify(data.user));
-    alert("Profile updated successfully!");
-    navigate("/dashboard"); 
-
-  } catch (err: any) {
-    console.error("HandleComplete Error:", err);
-    alert("Server error: " + (err.message || "Unknown error"));
-  }
-};
-
-
+  };
 
   // ==== NAVIGATION ====
   const handleNext = () => {
@@ -602,4 +635,3 @@ const Onboarding: React.FC = () => {
 };
 
 export default Onboarding;
-/*test test*/

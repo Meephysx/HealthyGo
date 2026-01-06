@@ -54,18 +54,29 @@ export const getBMICategory = (bmi: number): { category: string; color: string }
   return { category: 'Obese', color: 'text-red-600' };
 };
 
-export const calculateMacroTargets = (calories: number, goal: string) => {
+export const calculateMacroTargets = (
+  calories: number | null | undefined,
+  goal: 'weight-loss' | 'weight-gain' | 'muscle-gain' | null | undefined
+) => {
+  if (!calories || !goal) {
+    return {
+      protein: 0,
+      carbs: 0,
+      fat: 0
+    };
+  }
+
   const macroRatios = {
     'weight-loss': { protein: 0.35, carbs: 0.35, fat: 0.30 },
     'weight-gain': { protein: 0.25, carbs: 0.45, fat: 0.30 },
     'muscle-gain': { protein: 0.30, carbs: 0.40, fat: 0.30 }
   };
 
-  const ratios = macroRatios[goal as keyof typeof macroRatios];
-  
+  const ratios = macroRatios[goal];
+
   return {
-    protein: Math.round((calories * ratios.protein) / 4), // 4 cal per gram
-    carbs: Math.round((calories * ratios.carbs) / 4),     // 4 cal per gram
-    fat: Math.round((calories * ratios.fat) / 9)          // 9 cal per gram
+    protein: Math.round((calories * ratios.protein) / 4),
+    carbs: Math.round((calories * ratios.carbs) / 4),
+    fat: Math.round((calories * ratios.fat) / 9)
   };
 };
