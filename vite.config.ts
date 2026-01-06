@@ -7,9 +7,18 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      workbox: {
-        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024 // 5 MB
+
+      devOptions: {
+        enabled: true
       },
+
+      workbox: {
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024
+      },
+
+      // 🔥 PENTING: pastikan JSON ikut PWA
+      includeAssets: ['**/*.json'],
+
       manifest: {
         name: 'HealthyGo',
         short_name: 'HealthyGo',
@@ -32,5 +41,8 @@ export default defineConfig({
         ]
       }
     })
-  ]
+  ],
+
+  // 🔥 INI KUNCI UTAMA
+  assetsInclude: ['**/*.json']
 })
