@@ -3,6 +3,11 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  server: {
+    host: true,        // 🔥 WAJIB agar bisa diakses dari HP
+    port: 5173         // opsional
+  },
+
   plugins: [
     react(),
     VitePWA({
@@ -16,7 +21,6 @@ export default defineConfig({
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024
       },
 
-      // 🔥 PENTING: pastikan JSON ikut PWA
       includeAssets: ['**/*.json'],
 
       manifest: {
@@ -43,6 +47,5 @@ export default defineConfig({
     })
   ],
 
-  // 🔥 INI KUNCI UTAMA
   assetsInclude: ['**/*.json']
 })

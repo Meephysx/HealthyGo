@@ -174,50 +174,60 @@ const Profile: React.FC = () => {
     <div className="min-h-screen bg-gray-50 py-8">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header */}
-        <div className="bg-white rounded-xl shadow-sm p-8 mb-8">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-6">
-              <div className="p-4 bg-gradient-to-br from-green-500 to-blue-500 rounded-full">
+       {/* Header - PERBAIKAN RESPONSIVE */}
+        <div className="bg-white rounded-xl shadow-sm p-6 mb-8">
+          {/* Ubah layout jadi column di mobile, row di desktop (md) */}
+          <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+            
+            {/* User Info Section */}
+            <div className="flex flex-col md:flex-row items-center text-center md:text-left space-y-4 md:space-y-0 md:space-x-6 w-full">
+              <div className="p-4 bg-gradient-to-br from-green-500 to-blue-500 rounded-full flex-shrink-0">
                 <User className="h-12 w-12 text-white" />
               </div>
-              <div>
-                <h1 className="text-3xl font-bold text-gray-900">{user.name}</h1>
-                <p className="text-gray-600">{user.email}</p>
-                <div className="flex items-center space-x-4 mt-2">
+              
+              <div className="flex-1 min-w-0">
+                <h1 className="text-2xl md:text-3xl font-bold text-gray-900 truncate">
+                  {user.name}
+                </h1>
+                <p className="text-gray-600 truncate">{user.email}</p>
+                
+                <div className="flex flex-wrap items-center justify-center md:justify-start gap-2 mt-2">
                   <span className="text-sm text-gray-500">
                     Member since {user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'Recently'}
                   </span>
-                  <span className={`px-2 py-1 text-xs font-medium rounded-full ${getBmiColorClass(bmiInfo.color, 'text')} ${getBmiColorClass(bmiInfo.color, 'bg')}`}>
+                  <span className={`px-2 py-1 text-xs font-medium rounded-full whitespace-nowrap ${getBmiColorClass(bmiInfo.color, 'text')} ${getBmiColorClass(bmiInfo.color, 'bg')}`}>
                     BMI: {user.bmi} ({bmiInfo.category})
                   </span>
                 </div>
               </div>
             </div>
-            <div className="flex space-x-3">
+
+            {/* Action Buttons */}
+            <div className="flex space-x-3 w-full md:w-auto justify-center">
               {!isEditing ? (
                 <button
                   onClick={() => setIsEditing(true)}
-                  className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  className="flex items-center justify-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors w-full md:w-auto"
                 >
                   <Edit className="h-4 w-4 mr-2" />
                   Edit Profile
                 </button>
               ) : (
-                <>
+                <div className="flex space-x-3 w-full md:w-auto">
                   <button
                     onClick={() => setIsEditing(false)}
-                    className="px-4 py-2 text-gray-700 hover:text-gray-900"
+                    className="flex-1 md:flex-none px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 text-center"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={handleSave}
-                    className="flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                    className="flex-1 md:flex-none flex items-center justify-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
                   >
                     <Save className="h-4 w-4 mr-2" />
-                    Save Changes
+                    Save
                   </button>
-                </>
+                </div>
               )}
             </div>
           </div>
