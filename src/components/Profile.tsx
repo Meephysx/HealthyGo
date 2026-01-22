@@ -9,7 +9,8 @@ import {
   CheckCircle,
   Bell,
   Shield,
-  LogOut
+  LogOut,
+  XCircle // Icon baru untuk error state
 } from 'lucide-react';
 import { calculateBMI, calculateIdealWeight, calculateDailyCalories, getBMICategory } from '../utils/calculations';
 import { ACTIVITY_LEVELS, DIETARY_RESTRICTIONS, COMMON_ALLERGIES } from '../utils/constants';
@@ -18,7 +19,9 @@ import type { User as UserType } from '../types';
 const Profile: React.FC = () => {
   const [user, setUser] = useState<UserType | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [isLoading, setIsLoading] = useState(true); // Tambahkan state loading eksplisit
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null); // State baru untuk menangani error tanpa redirect
+  
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -31,44 +34,53 @@ const Profile: React.FC = () => {
     dietaryRestrictions: [] as string[],
     allergies: [] as string[]
   });
+  
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
+  // --- BAGIAN 1: LOAD DATA LEBIH AMAN ---
   useEffect(() => {
     const loadUserData = () => {
       try {
-        const userData = localStorage.getItem('user');
+        const userDataString = localStorage.getItem('user');
         
-        if (!userData) {
-          // Jika tidak ada data user, redirect ke halaman utama (login/onboarding)
+        // Hanya redirect jika data BENAR-BENAR kosong (belum login)
+        if (!userDataString) {
           window.location.href = '/';
           return;
         }
 
-        const parsedUser = JSON.parse(userData);
+        const parsedUser = JSON.parse(userDataString);
         
-        // Validasi dasar apakah data user valid
-        if (!parsedUser || !parsedUser.name) {
-          throw new Error("Invalid user data");
+        // Validasi minimal: Asal ada object, kita terima.
+        // Jangan throw error cuma karena nama kosong.
+        if (!parsedUser || typeof parsedUser !== 'object') {
+            // Hanya jika data benar-benar korup (bukan JSON valid), baru kita anggap error fatal
+            throw new Error("Data user rusak (Invalid Format)");
         }
 
         setUser(parsedUser);
+        
+        // Set Form Data dengan fallback nilai kosong agar tidak error controlled input
         setFormData({
           name: parsedUser.name || '',
           email: parsedUser.email || '',
-          age: parsedUser.age ? parsedUser.age.toString() : '',
+          age: parsedUser.age ? String(parsedUser.age) : '',
           gender: parsedUser.gender || 'male',
-          height: parsedUser.height ? parsedUser.height.toString() : '',
-          weight: parsedUser.weight ? parsedUser.weight.toString() : '',
-          activityLevel: parsedUser.activityLevel || '',
-          goal: parsedUser.goal || '',
-          dietaryRestrictions: parsedUser.dietaryRestrictions || [],
-          allergies: parsedUser.allergies || []
+          height: parsedUser.height ? String(parsedUser.height) : '',
+          weight: parsedUser.weight ? String(parsedUser.weight) : '',
+          activityLevel: parsedUser.activityLevel || 'moderate',
+          goal: parsedUser.goal || 'weight-loss',
+          dietaryRestrictions: Array.isArray(parsedUser.dietaryRestrictions) ? parsedUser.dietaryRestrictions : [],
+          allergies: Array.isArray(parsedUser.allergies) ? parsedUser.allergies : []
         });
-      } catch (error) {
-        console.error("Failed to load user profile:", error);
-        // Jika data corrupt, bersihkan dan redirect
-        localStorage.removeItem('user');
-        window.location.href = '/';
+
+      } catch (err: any) {
+        console.error("Gagal memuat profil:", err);
+        // JANGAN LANGSUNG LOGOUT. Tampilkan error di layar agar user tau kenapa.
+        setError("Gagal memuat data profil. Data mungkin rusak. Silakan coba login ulang atau hubungi support.");
+        // Opsi: Uncomment baris bawah ini jika ingin logout otomatis HANYA jika JSON error parah
+        // localStorage.removeItem('user');
+        // window.location.href = '/';
       } finally {
         setIsLoading(false);
       }
@@ -77,54 +89,73 @@ const Profile: React.FC = () => {
     loadUserData();
   }, []);
 
+  // --- BAGIAN 2: SIMPAN DATA DENGAN KONVERSI TIPE ---
   const handleSave = () => {
     if (!user) return;
 
     try {
-      const height = parseInt(formData.height) || 0;
-      const weight = parseInt(formData.weight) || 0;
-      const age = parseInt(formData.age) || 0;
+      // Pastikan konversi ke Number aman. Jika NaN, ubah jadi 0.
+      const heightVal = Number(formData.height) || 0;
+      const weightVal = Number(formData.weight) || 0;
+      const ageVal = Number(formData.age) || 0;
+
+      // Hitung ulang metrik kesehatan
+      const bmiVal = calculateBMI(weightVal, heightVal);
+      const idealWeightVal = calculateIdealWeight(heightVal, formData.gender as 'male' | 'female');
+      
+      // Hitung kalori (bungkus try-catch kecil jaga-jaga helper function error)
+      let dailyCaloriesVal = 0;
+      try {
+        dailyCaloriesVal = calculateDailyCalories(
+          weightVal,
+          heightVal,
+          ageVal,
+          formData.gender as 'male' | 'female',
+          formData.activityLevel,
+          formData.goal
+        );
+      } catch (calError) {
+        console.warn("Gagal hitung kalori:", calError);
+        dailyCaloriesVal = user.dailyCalories || 0; // Pakai nilai lama jika error
+      }
 
       const updatedUser: UserType = {
         ...user,
         name: formData.name,
         email: formData.email,
-        age: age,
+        age: ageVal,
         gender: formData.gender as 'male' | 'female',
-        height: height,
-        weight: weight,
+        height: heightVal,
+        weight: weightVal,
         activityLevel: formData.activityLevel as any,
         goal: formData.goal as any,
         dietaryRestrictions: formData.dietaryRestrictions,
         allergies: formData.allergies,
-        bmi: calculateBMI(weight, height),
-        idealWeight: calculateIdealWeight(height, formData.gender as 'male' | 'female'),
-        dailyCalories: calculateDailyCalories(
-          weight,
-          height,
-          age,
-          formData.gender as 'male' | 'female',
-          formData.activityLevel,
-          formData.goal
-        )
+        bmi: bmiVal,
+        idealWeight: idealWeightVal,
+        dailyCalories: dailyCaloriesVal
       };
 
+      // Simpan ke State dan LocalStorage
       setUser(updatedUser);
       localStorage.setItem('user', JSON.stringify(updatedUser));
+      
       setIsEditing(false);
+      alert("Profil berhasil diperbarui!"); // Feedback visual
+
     } catch (error) {
       console.error("Error saving profile:", error);
-      alert("Failed to save changes. Please check your inputs.");
+      alert("Gagal menyimpan perubahan. Pastikan data angka diisi dengan benar.");
     }
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('user');
-    localStorage.removeItem('workoutPlan');
-    localStorage.removeItem('completedExercises');
-    localStorage.removeItem('progressEntries');
-    localStorage.removeItem('favoriteFoods');
-    localStorage.removeItem('recentFoods');
+    // Bersihkan semua data
+    const keysToRemove = [
+        'user', 'workoutPlan', 'completedExercises', 
+        'progressEntries', 'favoriteFoods', 'recentFoods'
+    ];
+    keysToRemove.forEach(key => localStorage.removeItem(key));
     window.location.href = '/';
   };
 
@@ -137,7 +168,19 @@ const Profile: React.FC = () => {
     }));
   };
 
-  // State Loading
+  // Helper aman untuk warna BMI
+  const getBmiColorClass = (colorString: string | undefined, type: 'text' | 'bg') => {
+    if (!colorString) return type === 'text' ? 'text-gray-600' : 'bg-gray-100';
+    const colorBase = colorString.replace('text-', '');
+    if (type === 'bg') {
+      // Pastikan format warna valid sebelum di-split
+      return `bg-${colorBase.split('-')[0]}-100`; 
+    }
+    return colorString;
+  };
+
+  // --- RENDER STATES ---
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -146,40 +189,46 @@ const Profile: React.FC = () => {
     );
   }
 
-  // Jika loading selesai tapi user masih null (seharusnya sudah di-redirect, tapi untuk keamanan)
-  if (!user) {
-    return null; 
+  // Tampilan jika terjadi Error Fatal (bukan redirect)
+  if (error) {
+    return (
+        <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+            <div className="bg-white p-8 rounded-xl shadow-lg max-w-md text-center">
+                <XCircle className="h-16 w-16 text-red-500 mx-auto mb-4" />
+                <h2 className="text-xl font-bold text-gray-900 mb-2">Terjadi Kesalahan</h2>
+                <p className="text-gray-600 mb-6">{error}</p>
+                <div className="flex gap-4 justify-center">
+                    <button onClick={() => window.location.reload()} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+                        Refresh Halaman
+                    </button>
+                    <button onClick={handleLogout} className="px-4 py-2 border border-red-200 text-red-600 rounded hover:bg-red-50">
+                        Logout & Reset
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
   }
 
-  // Safe access untuk BMI info agar tidak crash jika calculations belum ada
-  let bmiInfo;
+  if (!user) return null; // Seharusnya tidak tercapai karena ada handling error di atas
+
+  // Hitung BMI info secara aman di render
+  let bmiInfo = { category: 'Unknown', color: 'text-gray-600' };
   try {
-    bmiInfo = getBMICategory(user.bmi);
-  } catch (e) {
-    bmiInfo = { category: 'Unknown', color: 'text-gray-600' };
-  }
-
-  // Helper untuk warna BMI aman
-  const getBmiColorClass = (colorString: string, type: 'text' | 'bg') => {
-    if (!colorString) return type === 'text' ? 'text-gray-600' : 'bg-gray-100';
-    // Asumsi colorString formatnya 'text-red-600'
-    const colorBase = colorString.replace('text-', '');
-    if (type === 'bg') {
-      return `bg-${colorBase.split('-')[0]}-100`; // Mengambil warna dasar (red/green/etc) dan membuatnya lighter
+    if(user.bmi) {
+        bmiInfo = getBMICategory(user.bmi);
     }
-    return colorString;
-  };
+  } catch (e) {
+    console.warn("BMI calc error render", e);
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 py-8">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Header */}
-       {/* Header - PERBAIKAN RESPONSIVE */}
+        
+        {/* Header Section */}
         <div className="bg-white rounded-xl shadow-sm p-6 mb-8">
-          {/* Ubah layout jadi column di mobile, row di desktop (md) */}
           <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-            
-            {/* User Info Section */}
             <div className="flex flex-col md:flex-row items-center text-center md:text-left space-y-4 md:space-y-0 md:space-x-6 w-full">
               <div className="p-4 bg-gradient-to-br from-green-500 to-blue-500 rounded-full flex-shrink-0">
                 <User className="h-12 w-12 text-white" />
@@ -187,7 +236,7 @@ const Profile: React.FC = () => {
               
               <div className="flex-1 min-w-0">
                 <h1 className="text-2xl md:text-3xl font-bold text-gray-900 truncate">
-                  {user.name}
+                  {user.name || 'User'}
                 </h1>
                 <p className="text-gray-600 truncate">{user.email}</p>
                 
@@ -195,14 +244,15 @@ const Profile: React.FC = () => {
                   <span className="text-sm text-gray-500">
                     Member since {user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'Recently'}
                   </span>
-                  <span className={`px-2 py-1 text-xs font-medium rounded-full whitespace-nowrap ${getBmiColorClass(bmiInfo.color, 'text')} ${getBmiColorClass(bmiInfo.color, 'bg')}`}>
-                    BMI: {user.bmi} ({bmiInfo.category})
-                  </span>
+                  {user.bmi && (
+                      <span className={`px-2 py-1 text-xs font-medium rounded-full whitespace-nowrap ${getBmiColorClass(bmiInfo.color, 'text')} ${getBmiColorClass(bmiInfo.color, 'bg')}`}>
+                        BMI: {user.bmi} ({bmiInfo.category})
+                      </span>
+                  )}
                 </div>
               </div>
             </div>
 
-            {/* Action Buttons */}
             <div className="flex space-x-3 w-full md:w-auto justify-center">
               {!isEditing ? (
                 <button
@@ -215,7 +265,11 @@ const Profile: React.FC = () => {
               ) : (
                 <div className="flex space-x-3 w-full md:w-auto">
                   <button
-                    onClick={() => setIsEditing(false)}
+                    onClick={() => {
+                        // Reset form ke data user asli saat cancel
+                        setFormData(prev => ({...prev, name: user.name})); 
+                        setIsEditing(false);
+                    }}
                     className="flex-1 md:flex-none px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 text-center"
                   >
                     Cancel
@@ -450,15 +504,17 @@ const Profile: React.FC = () => {
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <span className="text-gray-600">BMI</span>
-                  <span className={`font-semibold ${getBmiColorClass(bmiInfo.color, 'text')}`}>{user.bmi}</span>
+                  <span className={`font-semibold ${getBmiColorClass(bmiInfo.color, 'text')}`}>
+                    {user.bmi || '-'}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-gray-600">Ideal Weight</span>
-                  <span className="font-semibold text-gray-900">{user.idealWeight}kg</span>
+                  <span className="font-semibold text-gray-900">{user.idealWeight || '-'}kg</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-gray-600">Daily Calories</span>
-                  <span className="font-semibold text-gray-900">{user.dailyCalories}</span>
+                  <span className="font-semibold text-gray-900">{user.dailyCalories || '-'}</span>
                 </div>
               </div>
             </div>
@@ -500,7 +556,7 @@ const Profile: React.FC = () => {
                 <h3 className="text-lg font-semibold text-gray-900">Your Goal</h3>
               </div>
               <p className="text-gray-700 mb-4 capitalize">
-                {user.goal ? user.goal.replace('-', ' ') : 'fitness'} Journey
+                {user.goal ? user.goal.replace('-', ' ') : 'Fitness'} Journey
               </p>
               <div className="text-sm text-gray-600">
                 Stay consistent with your meal planning and workouts to achieve your {user.goal ? user.goal.replace('-', ' ') : ''} goals!

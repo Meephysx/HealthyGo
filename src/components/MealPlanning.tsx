@@ -12,6 +12,8 @@ interface User {
   goal: string;
   activityLevel: string;
   dailyCalories: number;
+  dietaryRestrictions?: string[];
+  allergies?: string[];
 }
 
 interface Food {
@@ -27,6 +29,9 @@ interface Food {
 interface AIMeal {
   menu: string;
   calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
   time: string;
   reasoning: string;
   portions: string;
@@ -47,7 +52,7 @@ type MealType = 'Sarapan' | 'MakanSiang' | 'MakanMalam' | 'snacks';
 const MealPlanning: React.FC = () => {
   // --- STATE ---
   const [user, setUser] = useState<User>({
-    weight: 70, height: 170, age: 25, gender: 'pria', goal: 'maintain-weight', activityLevel: 'moderate', dailyCalories: 2000
+    weight: 70, height: 170, age: 25, gender: 'pria', goal: 'maintain-weight', activityLevel: 'moderate', dailyCalories: 2000, dietaryRestrictions: [], allergies: []
   });
 
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -77,10 +82,25 @@ const MealPlanning: React.FC = () => {
 
   // --- LOAD DATA (Effect Awal) ---
   useEffect(() => {
-    // 1. Load User
+    // 1. Load User (Lengkap dengan dietary restrictions dan allergies)
     const storedUser = localStorage.getItem('user');
     if (storedUser) {
-      try { setUser(JSON.parse(storedUser)); } catch (e) { console.error(e); }
+      try {
+        const parsed = JSON.parse(storedUser);
+        setUser({
+          weight: parsed.weight || 70,
+          height: parsed.height || 170,
+          age: parsed.age || 25,
+          gender: parsed.gender || 'pria',
+          goal: parsed.goal || 'maintain-weight',
+          activityLevel: parsed.activityLevel || 'moderate',
+          dailyCalories: parsed.dailyCalories || 2000,
+          dietaryRestrictions: parsed.dietaryRestrictions || [],
+          allergies: parsed.allergies || []
+        });
+      } catch (e) {
+        console.error('Error parsing user data:', e);
+      }
     }
 
     // 2. Load UI Preference (Terakhir pakai AI atau Manual?)
@@ -131,15 +151,37 @@ const MealPlanning: React.FC = () => {
     const apiKey = "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";
     const apiUrl = "https://openrouter.ai/api/v1/chat/completions"; 
   
+    // Format dietary restrictions dan allergies dengan baik
+    const dietaryInfo = user.dietaryRestrictions && user.dietaryRestrictions.length > 0 
+      ? `Pantangan diet: ${user.dietaryRestrictions.join(', ')}` 
+      : 'Tidak ada pantangan diet khusus';
+    
+    const allergiesInfo = user.allergies && user.allergies.length > 0 
+      ? `Alergi: ${user.allergies.join(', ')}. HARUS hindari makanan ini sepenuhnya!` 
+      : 'Tidak ada alergi';
+
     const prompt = `
-    Bertindaklah sebagai ahli gizi profesional. Buat rencana makan harian Indonesia yang sehat dan mudah didapat.
-    Profil: Gender ${user.gender}, ${user.age} thn, Target ${user.dailyCalories} kcal.
+    Bertindaklah sebagai ahli gizi profesional yang berpengalaman. Buat rencana makan harian Indonesia yang sehat, mudah didapat, dan DISESUAIKAN dengan profil user.
+    
+    PROFIL USER:
+    - Usia: ${user.age} tahun
+    - Gender: ${user.gender === 'pria' ? 'Laki-laki' : 'Perempuan'}
+    - Tinggi: ${user.height} cm
+    - Berat: ${user.weight} kg
+    - Target Kalori Harian: ${user.dailyCalories} kcal
+    - Level Aktivitas: ${user.activityLevel}
+    - Tujuan: ${user.goal === 'weight-loss' ? 'Penurunan Berat Badan' : user.goal === 'weight-gain' ? 'Penambahan Berat Badan' : user.goal === 'muscle-gain' ? 'Penambahan Otot' : 'Mempertahankan Berat Badan'}
+    - ${dietaryInfo}
+    - ${allergiesInfo}
+    
+    PENTING: Menu HARUS sesuai dengan pantangan diet dan alergi. Jangan rekomendasikan makanan yang mengandung alergen.
+    
     Output JSON Valid:
     {
-      "Sarapan": { "menu": "...", "calories": 400, "time": "07:00", "reasoning": "...", "portions": "..." },
-      "MakanSiang": { "menu": "...", "calories": 700, "time": "13:00", "reasoning": "...", "portions": "..." },
-      "MakanMalam": { "menu": "...", "calories": 500, "time": "19:00", "reasoning": "...", "portions": "..." },
-      "snacks": { "menu": "...", "calories": 200, "time": "16:00", "reasoning": "...", "portions": "..." },
+      "Sarapan": { "menu": "...", "calories": 400, "protein": 15, "carbs": 45, "fat": 12, "time": "07:00", "reasoning": "...", "portions": "..." },
+      "MakanSiang": { "menu": "...", "calories": 700, "protein": 30, "carbs": 80, "fat": 20, "time": "13:00", "reasoning": "...", "portions": "..." },
+      "MakanMalam": { "menu": "...", "calories": 500, "protein": 25, "carbs": 55, "fat": 15, "time": "19:00", "reasoning": "...", "portions": "..." },
+      "snacks": { "menu": "...", "calories": 200, "protein": 8, "carbs": 25, "fat": 6, "time": "16:00", "reasoning": "...", "portions": "..." },
       "totalCalories": 1800,
       "nutritionTips": "...",
       "hydrationGoal": "..."
@@ -155,20 +197,40 @@ const MealPlanning: React.FC = () => {
           "HTTP-Referer": window.location.origin,
         },
         body: JSON.stringify({
-          "model": "google/gemini-2.0-flash-001", 
+          "model": "google/gemini-2.0-flash-001",
           "messages": [{ "role": "user", "content": prompt }],
           "response_format": { "type": "json_object" }
         }),
       });
 
-      if (!response.ok) throw new Error("API Error");
+      if (!response.ok) throw new Error("API Error: " + response.status);
       const data = await response.json();
-      const rawContent = data.choices?.[0]?.message?.content;
-      if (!rawContent) throw new Error("Respon kosong");
+      console.log('AI raw response:', data);
 
-      const parsedPlan: AIMealPlan = JSON.parse(rawContent);
+      // openrouter / LM providers sometimes return the JSON object directly
+      // or return a string containing JSON. Support both.
+      const rawContent = data.choices?.[0]?.message?.content ?? data.choices?.[0]?.message ?? data.choices?.[0]?.content ?? null;
+      if (!rawContent) throw new Error("Respon kosong dari AI");
+
+      let parsedPlan: AIMealPlan | null = null;
+
+      if (typeof rawContent === 'string') {
+        // try direct parse, otherwise extract JSON block inside text
+        try {
+          parsedPlan = JSON.parse(rawContent);
+        } catch (e) {
+          const match = rawContent.match(/\{[\s\S]*\}/);
+          if (match) {
+            parsedPlan = JSON.parse(match[0]);
+          }
+        }
+      } else if (typeof rawContent === 'object') {
+        parsedPlan = rawContent as AIMealPlan;
+      }
+
+      if (!parsedPlan) throw new Error('Gagal mem-parsing response AI');
+
       setAiMealPlan(parsedPlan);
-      
       // Simpan hasil AI ke storage hari ini
       localStorage.setItem(`ai-meal-${dateKey}`, JSON.stringify(parsedPlan));
 
@@ -281,6 +343,14 @@ const MealPlanning: React.FC = () => {
     ? Math.min(100, (consumedNutrition.calories / user.dailyCalories) * 100) 
     : 0;
 
+  // --- HANDLER REFRESH MENU ---
+  const handleRefreshMenu = () => {
+    const dateKey = getCurrentDateKey();
+    localStorage.removeItem(`ai-meal-${dateKey}`);
+    setAiMealPlan(null);
+    generateAIMealPlan();
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 py-8">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -295,32 +365,93 @@ const MealPlanning: React.FC = () => {
           </div>
         </div>
 
-        {/* Toggle Mode */}
-        <div className="flex justify-center mb-8">
+        {/* Toggle Mode & Refresh Button */}
+        <div className="flex flex-col sm:flex-row justify-center items-center gap-4 mb-8">
           <div className="inline-flex bg-gray-200 rounded-lg p-1">
             <button onClick={() => setShowAiRecommendations(true)} className={`px-6 py-2 rounded-md text-sm font-medium transition-all ${showAiRecommendations ? 'bg-white text-green-600 shadow-sm' : 'text-gray-600'}`}>Rekomendasi AI</button>
             <button onClick={() => setShowAiRecommendations(false)} className={`px-6 py-2 rounded-md text-sm font-medium transition-all ${!showAiRecommendations ? 'bg-white text-green-600 shadow-sm' : 'text-gray-600'}`}>Atur Manual</button>
           </div>
+          {showAiRecommendations && aiMealPlan && !isLoadingAI && (
+            <button 
+              onClick={handleRefreshMenu}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg font-medium transition-colors"
+            >
+              <RefreshCw size={16} /> Ganti Menu
+            </button>
+          )}
         </div>
 
-        {/* Nutrition Summary Bar */}
+        {/* Nutrition Summary Bar - DETAILED */}
         <div className="bg-white rounded-2xl shadow-sm p-6 mb-8 border border-gray-100">
-          <div className="grid grid-cols-3 gap-6 text-center">
-            <div>
-              <p className="text-xs text-gray-500 uppercase font-bold">Target</p>
-              <p className="text-xl font-bold text-gray-900">{user.dailyCalories}</p>
+          {/* Kalori Section */}
+          <div className="mb-6">
+            <div className="grid grid-cols-3 md:grid-cols-4 gap-4 mb-3">
+              <div className="text-center">
+                <p className="text-xs text-gray-500 uppercase font-bold">Target</p>
+                <p className="text-lg md:text-xl font-bold text-gray-900">{user.dailyCalories}</p>
+                <p className="text-xs text-gray-400">kcal</p>
+              </div>
+              <div className="text-center">
+                <p className="text-xs text-gray-500 uppercase font-bold">Masuk</p>
+                <p className="text-lg md:text-xl font-bold text-green-600">{consumedNutrition.calories}</p>
+                <p className="text-xs text-gray-400">kcal</p>
+              </div>
+              <div className="text-center">
+                <p className="text-xs text-gray-500 uppercase font-bold">Sisa</p>
+                <p className="text-lg md:text-xl font-bold text-blue-600">{Math.max(0, user.dailyCalories - consumedNutrition.calories)}</p>
+                <p className="text-xs text-gray-400">kcal</p>
+              </div>
+              <div className="text-center">
+                <p className="text-xs text-gray-500 uppercase font-bold">Progress</p>
+                <p className="text-lg md:text-xl font-bold text-gray-900">{Math.round(calorieProgress)}%</p>
+                <p className="text-xs text-gray-400">dari target</p>
+              </div>
             </div>
-            <div>
-              <p className="text-xs text-gray-500 uppercase font-bold">Masuk</p>
-              <p className="text-xl font-bold text-green-600">{consumedNutrition.calories}</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 uppercase font-bold">Sisa</p>
-              <p className="text-xl font-bold text-gray-400">{Math.max(0, user.dailyCalories - consumedNutrition.calories)}</p>
+            <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
+              <div className="h-full bg-green-500 transition-all duration-500" style={{ width: `${calorieProgress}%` }} />
             </div>
           </div>
-          <div className="mt-4 h-2 w-full bg-gray-100 rounded-full overflow-hidden">
-            <div className="h-full bg-green-500 transition-all duration-500" style={{ width: `${calorieProgress}%` }} />
+
+          {/* Makronutrient Details */}
+          <div className="border-t pt-6">
+            <h3 className="text-sm font-bold text-gray-700 mb-4 uppercase">Rincian Makronutrisi</h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Protein */}
+              <div>
+                <div className="flex justify-between mb-2">
+                  <span className="text-sm font-medium text-gray-700">Protein</span>
+                  <span className="text-sm font-bold text-orange-600">{consumedNutrition.protein}g</span>
+                </div>
+                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-orange-500 transition-all duration-500" style={{ width: `${Math.min(100, (consumedNutrition.protein / 150) * 100)}%` }} />
+                </div>
+                <p className="text-xs text-gray-400 mt-1">Target: ~150g/hari</p>
+              </div>
+
+              {/* Carbs */}
+              <div>
+                <div className="flex justify-between mb-2">
+                  <span className="text-sm font-medium text-gray-700">Karbohidrat</span>
+                  <span className="text-sm font-bold text-blue-600">{consumedNutrition.carbs}g</span>
+                </div>
+                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-blue-500 transition-all duration-500" style={{ width: `${Math.min(100, (consumedNutrition.carbs / 250) * 100)}%` }} />
+                </div>
+                <p className="text-xs text-gray-400 mt-1">Target: ~250g/hari</p>
+              </div>
+
+              {/* Fat */}
+              <div>
+                <div className="flex justify-between mb-2">
+                  <span className="text-sm font-medium text-gray-700">Lemak</span>
+                  <span className="text-sm font-bold text-amber-600">{consumedNutrition.fat}g</span>
+                </div>
+                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-amber-500 transition-all duration-500" style={{ width: `${Math.min(100, (consumedNutrition.fat / 70) * 100)}%` }} />
+                </div>
+                <p className="text-xs text-gray-400 mt-1">Target: ~70g/hari</p>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -348,18 +479,46 @@ const MealPlanning: React.FC = () => {
                   <div key={type} className={`bg-white p-6 rounded-2xl border transition-all ${isDone ? 'border-green-200 bg-green-50' : 'border-gray-100 shadow-sm hover:shadow-md'}`}>
                     <div className="flex justify-between items-start mb-4">
                       <h3 className="font-bold text-gray-900">{type}</h3>
-                      <button 
-                        onClick={() => toggleFoodConsumed(type, type)} 
-                        className={`w-8 h-8 flex items-center justify-center rounded-full transition-all ${isDone ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-300 hover:bg-gray-200'}`}
-                      >
-                        <Check size={16}/>
-                      </button>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={handleRefreshMenu}
+                          className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
+                          title="Ganti menu ini"
+                        >
+                          <RefreshCw size={16}/>
+                        </button>
+                        <button 
+                          onClick={() => toggleFoodConsumed(type, type)} 
+                          className={`w-8 h-8 flex items-center justify-center rounded-full transition-all ${isDone ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-300 hover:bg-gray-200'}`}
+                        >
+                          <Check size={16}/>
+                        </button>
+                      </div>
                     </div>
-                    <p className="text-gray-800 font-medium mb-2">{meal.menu}</p>
-                    <div className="flex items-center gap-2 text-sm text-gray-500 mb-4">
+                    <p className="text-gray-800 font-medium mb-3">{meal.menu}</p>
+                    
+                    {/* Waktu & Kalori */}
+                    <div className="flex items-center gap-2 text-sm text-gray-500 mb-3">
                       <span>⏰ {meal.time}</span>
                       <span>🔥 {meal.calories} kcal</span>
                     </div>
+
+                    {/* Macronutrients */}
+                    <div className="grid grid-cols-3 gap-2 mb-3 p-2 bg-gray-50 rounded-lg">
+                      <div className="text-center">
+                        <p className="text-xs font-bold text-orange-600">{meal.protein}g</p>
+                        <p className="text-xs text-gray-500">Protein</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-xs font-bold text-blue-600">{meal.carbs}g</p>
+                        <p className="text-xs text-gray-500">Carbs</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-xs font-bold text-amber-600">{meal.fat}g</p>
+                        <p className="text-xs text-gray-500">Fat</p>
+                      </div>
+                    </div>
+
                     <p className="text-xs text-gray-500 bg-gray-50 p-2 rounded italic">"{meal.reasoning}"</p>
                   </div>
                 );
@@ -393,20 +552,42 @@ const MealPlanning: React.FC = () => {
                   {customMealPlan[type].length > 0 ? customMealPlan[type].map(food => {
                     const isDone = isFoodConsumed(food.id, type);
                     return (
-                      <div key={food.id} className={`flex items-center justify-between p-3 rounded-xl border transition-all ${isDone ? 'bg-green-50 border-green-100' : 'bg-white border-gray-100'}`}>
-                        <div className="flex items-center gap-3 overflow-hidden">
-                          <button 
-                            onClick={() => toggleFoodConsumed(food.id, type)} 
-                            className={`shrink-0 w-6 h-6 rounded border flex items-center justify-center transition-colors ${isDone ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300 text-transparent hover:border-green-400'}`}
-                          >
-                            <Check size={12}/>
-                          </button>
-                          <div className="min-w-0">
-                            <p className={`text-sm font-semibold truncate ${isDone ? 'text-gray-500 line-through' : 'text-gray-800'}`}>{food.name}</p>
-                            <p className="text-xs text-gray-400">{food.calories} kcal • {food.servingSize}</p>
+                      <div key={food.id} className={`p-4 rounded-xl border transition-all ${isDone ? 'bg-green-50 border-green-100' : 'bg-white border-gray-100'}`}>
+                        <div className="flex items-center justify-between gap-3 mb-3">
+                          <div className="flex items-center gap-3 overflow-hidden min-w-0">
+                            <button 
+                              onClick={() => toggleFoodConsumed(food.id, type)} 
+                              className={`shrink-0 w-6 h-6 rounded border flex items-center justify-center transition-colors ${isDone ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300 text-transparent hover:border-green-400'}`}
+                            >
+                              <Check size={12}/>
+                            </button>
+                            <div className="min-w-0">
+                              <p className={`text-sm font-semibold ${isDone ? 'text-gray-500 line-through' : 'text-gray-800'}`}>{food.name}</p>
+                              <p className="text-xs text-gray-400">{food.servingSize}</p>
+                            </div>
+                          </div>
+                          <button onClick={() => removeFoodFromMeal(food.id, type)} className="text-gray-300 hover:text-red-500 p-1 shrink-0"><Trash2 size={16}/></button>
+                        </div>
+                        
+                        {/* Nutrition Details */}
+                        <div className="grid grid-cols-4 gap-2 text-center bg-gray-50 p-2 rounded-lg">
+                          <div>
+                            <p className="text-xs font-bold text-green-600">{food.calories}</p>
+                            <p className="text-xs text-gray-500">kcal</p>
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold text-orange-600">{food.protein}g</p>
+                            <p className="text-xs text-gray-500">Protein</p>
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold text-blue-600">{food.carbs}g</p>
+                            <p className="text-xs text-gray-500">Carbs</p>
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold text-amber-600">{food.fat}g</p>
+                            <p className="text-xs text-gray-500">Fat</p>
                           </div>
                         </div>
-                        <button onClick={() => removeFoodFromMeal(food.id, type)} className="text-gray-300 hover:text-red-500 p-1"><Trash2 size={16}/></button>
                       </div>
                     );
                   }) : (
@@ -431,14 +612,14 @@ const MealPlanning: React.FC = () => {
                 </div>
                 <button onClick={() => setShowFoodSelector(false)} className="p-2 hover:bg-gray-100 rounded-full"><X size={20}/></button>
               </div>
-              
+                
               <div className="p-4 overflow-y-auto">
                 {/* KOMPONEN AI SEARCH YANG ANDA BUAT */}
                 <AISearch 
                   onSelectFood={(food) => { 
                     addFoodToMeal({ ...food, id: `f-${Date.now()}` }); 
-                    // Opsional: Tutup modal setelah pilih
-                    // setShowFoodSelector(false); 
+                    // Tutup modal otomatis setelah memilih
+                    setShowFoodSelector(false); 
                   }} 
                 />
               </div>

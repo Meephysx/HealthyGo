@@ -59,19 +59,19 @@ const LandingPage: React.FC = () => {
 
   const testimonials = [
     {
-      name: 'Sarah Johnson',
+      name: 'Tresna Gunawan',
       role: 'Lost 25 lbs',
       content: 'This app completely changed my relationship with food and exercise. The personalized approach made all the difference.',
       rating: 5
     },
     {
-      name: 'Mike Chen',
+      name: 'Boyke Ramadha',
       role: 'Gained 15 lbs muscle',
       content: 'Finally found a program that helped me gain healthy weight. The meal plans are amazing and easy to follow.',
       rating: 5
     },
     {
-      name: 'Emily Davis',
+      name: 'Siti Za',
       role: 'Improved fitness',
       content: 'Love how everything is tracked automatically. The workouts are challenging but achievable.',
       rating: 5

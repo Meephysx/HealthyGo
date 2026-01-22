@@ -14,12 +14,17 @@ import FoodSearch from "./components/FoodSearch";
 import Progress from "./components/Progress";
 
 
-// Layout wrapper to show navigation only on selected pages
+// --- MODIFIKASI DISINI ---
+// Layout wrapper: 
+// 1. pt-16: Memberi ruang untuk Header Atas
+// 2. pb-20 md:pb-0: Memberi ruang untuk Bottom Nav (hanya di mobile/tablet)
 const LayoutWithNav = ({ children }: { children: React.ReactNode }) => {
   return (
     <>
       <Navigation />
-      <div className="pt-16">{children}</div>
+      <div className="pt-16 pb-20 md:pb-8 min-h-screen bg-gray-50">
+        {children}
+      </div>
     </>
   );
 };
@@ -28,11 +33,8 @@ const LayoutWithNav = ({ children }: { children: React.ReactNode }) => {
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const user = auth.currentUser;
   
-  // Catatan: Idealnya gunakan onAuthStateChanged / loading state dari context 
-  // untuk mencegah redirect saat firebase sedang loading, 
-  // tapi untuk logika dasar ini sudah cukup memblokir akses.
   if (!user) {
-    return <Navigate to="/onboarding" replace />; // Redirect ke halaman login (onboarding)
+    return <Navigate to="/onboarding" replace />;
   }
   return <>{children}</>;
 };
@@ -42,18 +44,16 @@ function App() {
     <Router>
       <NutritionProvider>
         <Routes>
-          {/* Landing Page (NO NAVIGATION BAR) */}
+          {/* Landing Page */}
           <Route path="/" element={<LandingPage />} />
 
-          {/* PERBAIKAN DISINI:
-            Hapus <LayoutWithNav> agar menu tidak muncul saat Login/Register 
-          */}
+          {/* Onboarding */}
           <Route
             path="/onboarding"
             element={<Onboarding />} 
           />
 
-          {/* Protected Routes (Halaman yang butuh Login) */}
+          {/* Protected Routes */}
           <Route
             path="/dashboard"
             element={
@@ -65,6 +65,8 @@ function App() {
             }
           />
 
+          {/* Note: User bisa akses exercises lewat dashboard atau link lain, 
+              karena menu 'Plan' saat ini mengarah ke Meals */}
           <Route
             path="/exercises"
             element={

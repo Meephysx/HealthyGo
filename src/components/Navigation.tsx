@@ -4,91 +4,103 @@ import {
   Home, 
   User, 
   Calendar, 
-  Dumbbell, 
   Search, 
   TrendingUp,
-  Heart
+  Heart,
+  Dumbbell
 } from 'lucide-react';
 
 const Navigation: React.FC = () => {
   const location = useLocation();
 
+  // Menu bawah sekarang hanya 5 (Tanpa Search)
   const navItems = [
-    { path: '/dashboard', icon: Home, label: 'Dashboard' },
-    { path: '/meals', icon: Calendar, label: 'Meals' },
+    { path: '/dashboard', icon: Home, label: 'Home' },
+    { path: '/meals', icon: Calendar, label: 'Meals' }, 
     { path: '/exercises', icon: Dumbbell, label: 'Workouts' },
-    { path: '/food-search', icon: Search, label: 'Food Search' },
     { path: '/progress', icon: TrendingUp, label: 'Progress' },
     { path: '/profile', icon: User, label: 'Profile' }
   ];
 
   return (
-    <nav className="fixed top-0 left-0 right-0 bg-white shadow-lg z-50">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16 gap-4">
+    <>
+      {/* TOP BAR */}
+      <nav className="fixed top-0 left-0 right-0 bg-white shadow-sm z-50 h-16 border-b border-gray-100">
+        <div className="max-w-7xl mx-auto px-4 h-full flex items-center justify-between">
           
-          {/* Logo Section - Fixed width agar tidak terhimpit */}
-          <Link to="/dashboard" className="flex items-center space-x-2 flex-shrink-0">
-            <Heart className="h-8 w-8 text-green-600" />
-            <span className="text-xl font-bold text-gray-900 hidden xs:block">HealthyGO</span>
+          {/* SISI KIRI: Logo & Nama */}
+          <Link to="/dashboard" className="flex items-center space-x-2">
+            <Heart className="h-7 w-7 text-green-600 fill-green-600" />
+            <span className="text-xl font-bold text-gray-900 tracking-tight">
+              HealthyGO
+            </span>
           </Link>
-          
-          {/* Desktop Menu */}
-          <div className="hidden md:flex space-x-8">
-            {navItems.map(({ path, icon: Icon, label }) => (
-              <Link
-                key={path}
-                to={path}
-                className={`flex items-center space-x-1 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                  location.pathname === path
-                    ? 'text-green-600 bg-green-50'
-                    : 'text-gray-700 hover:text-green-600 hover:bg-green-50'
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-                <span>{label}</span>
-              </Link>
-            ))}
-          </div>
 
-          {/* Mobile Menu (Scrollable) */}
-          {/* PERBAIKAN: Menggunakan min-w-0 agar flex item bisa shrink, dan menghapus justify-end */}
-          <div className="md:hidden flex flex-1 min-w-0">
-            <div className="flex overflow-x-auto items-center space-x-2 no-scrollbar py-1 w-full justify-start sm:justify-end mask-fade">
-              {navItems.map(({ path, icon: Icon }) => (
+          {/* SISI KANAN: Icon Search (Mobile) & Menu (Desktop) */}
+          <div className="flex items-center space-x-4">
+            {/* Icon Search di Kanan Atas (Hanya muncul di Mobile) */}
+            <Link 
+              to="/food-search" 
+              className={`md:hidden p-2 rounded-full transition-colors ${
+                location.pathname === '/food-search' 
+                ? 'bg-green-50 text-green-600' 
+                : 'text-gray-500'
+              }`}
+            >
+              <Search className="h-6 w-6" />
+            </Link>
+
+            {/* Desktop Menu */}
+            <div className="hidden md:flex space-x-6">
+              {navItems.map(({ path, label }) => (
                 <Link
                   key={path}
                   to={path}
-                  className={`p-2 rounded-md flex-shrink-0 transition-colors ${
-                    location.pathname === path
-                      ? 'text-green-600 bg-green-50'
-                      : 'text-gray-700 hover:text-green-600'
+                  className={`text-sm font-medium transition-colors hover:text-green-600 ${
+                    location.pathname === path ? 'text-green-600' : 'text-gray-500'
                   }`}
                 >
-                  <Icon className="h-6 w-6" />
+                  {label}
                 </Link>
               ))}
+              {/* Search juga ada di desktop menu */}
+              <Link
+                to="/food-search"
+                className={`text-sm font-medium transition-colors hover:text-green-600 ${
+                  location.pathname === '/food-search' ? 'text-green-600' : 'text-gray-500'
+                }`}
+              >
+                Search
+              </Link>
             </div>
           </div>
+        </div>
+      </nav>
 
+      {/* BOTTOM NAVIGATION (Hanya 5 Item) */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-50 pb-safe">
+        <div className="flex justify-around items-center h-16">
+          {navItems.map(({ path, icon: Icon, label }) => {
+            const isActive = location.pathname === path;
+            return (
+              <Link
+                key={path}
+                to={path}
+                className={`flex flex-col items-center justify-center w-full h-full space-y-1 ${
+                  isActive ? 'text-green-600' : 'text-gray-400'
+                }`}
+              >
+                <Icon 
+                  className={`h-5 w-5 ${isActive ? 'scale-110' : ''}`} 
+                  fill={isActive ? "currentColor" : "none"}
+                />
+                <span className="text-[10px] font-medium">{label}</span>
+              </Link>
+            );
+          })}
         </div>
       </div>
-
-      <style>{`
-        .no-scrollbar::-webkit-scrollbar {
-          display: none;
-        }
-        .no-scrollbar {
-          -ms-overflow-style: none;
-          scrollbar-width: none;
-        }
-        /* Opsional: Memberi efek pudar di ujung jika scrollable */
-        .mask-fade {
-          mask-image: linear-gradient(to right, black 85%, transparent 100%);
-          -webkit-mask-image: linear-gradient(to right, black 85%, transparent 100%);
-        }
-      `}</style>
-    </nav>
+    </>
   );
 };
 
