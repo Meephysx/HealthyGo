@@ -232,3 +232,4 @@ export const COMMON_ALLERGIES = [
   'Shellfish',
   'Sesame'
 ];
+
