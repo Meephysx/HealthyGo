@@ -1,0 +1,13 @@
+[build]
+  publish = "dist"
+  functions = "netlify/functions"
+
+[dev]
+  command = "npm run dev"
+  port = 5174
+  functions = "netlify/functions"
+
+# Optional: set environment variables here for local builds with Netlify CLI
+# You still need to set them in Netlify site settings for production.
+# [context.production.environment]
+#   OPENROUTER_API_KEY = "your_key_here"

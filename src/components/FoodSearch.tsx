@@ -28,8 +28,7 @@ const AISearch: React.FC<FoodSearchProps> = ({ onSelectFood }) => {
     setError(null);
     setSearchResults([]);
 
-    const apiKey = "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";
-    const apiUrl = "https://openrouter.ai/api/v1/chat/completions";
+    const apiUrl = "/.netlify/functions/ai-chat";
 
     const prompt = `
       Sebagai ahli nutrisi, berikan informasi nutrisi lengkap untuk makanan: '${searchQuery}'.
@@ -62,9 +61,7 @@ const AISearch: React.FC<FoodSearchProps> = ({ onSelectFood }) => {
       const response = await fetch(apiUrl, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${apiKey}`,
           "Content-Type": "application/json",
-          "HTTP-Referer": window.location.origin,
         },
         body: JSON.stringify(body)
       });
