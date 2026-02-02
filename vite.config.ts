@@ -5,7 +5,15 @@ import { VitePWA } from 'vite-plugin-pwa'
 export default defineConfig({
   server: {
     host: true,        // 🔥 WAJIB agar bisa diakses dari HP
-    port: 5173         // opsional
+    port: 5173,        // opsional
+    proxy: {
+      '/api': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api/, '/api')
+      }
+    }
   },
 
   plugins: [

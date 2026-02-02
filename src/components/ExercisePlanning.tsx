@@ -277,12 +277,10 @@ FORMAT JSON:
 }`;
 
     try {
-      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      const response = await fetch("/.netlify/functions/ai-chat", {
         method: "POST",
         headers: {
-          "Authorization": "Bearer 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",
           "Content-Type": "application/json",
-          "HTTP-Referer": window.location.origin,
         },
         body: JSON.stringify({
           model: "google/gemini-2.0-flash-001",
