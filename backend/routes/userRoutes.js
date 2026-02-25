@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const admin = require("../firebaseAdmin");
+const { admin, db } = require("../firebaseAdmin");
 const verifyUser = require("../middleware/authMiddleware");
 
 // =========================
@@ -18,22 +18,27 @@ router.post("/register", async (req, res) => {
     const decodedToken = await admin.auth().verifyIdToken(idToken);
     const uid = decodedToken.uid;
 
-    // Cek apakah user sudah ada di Realtime DB
-    const snapshot = await admin.database().ref(`users/${uid}`).once("value");
-    if (snapshot.exists()) {
+    // Cek apakah user sudah ada di Firestore
+    const userRef = db.collection("users").doc(uid);
+    const userSnap = await userRef.get();
+    if (userSnap.exists) {
       return res.status(400).json({ message: "User sudah terdaftar" });
     }
 
     const newUser = {
       fullname,
+      name: fullname,
       email: decodedToken.email,
       createdAt: new Date().toISOString(),
       profileCompleted: false,
+      allergies: [],
+      preferences: [],
+      dislikes: []
     };
 
-    await admin.database().ref(`users/${uid}`).set(newUser);
+    await userRef.set(newUser);
 
-    return res.status(201).json({ message: "Registrasi berhasil", user: newUser });
+    return res.status(201).json({ message: "Registrasi berhasil", user: { ...newUser, uid } });
 
   } catch (error) {
     console.error("REGISTER ERROR:", error);
@@ -55,13 +60,14 @@ router.post("/login", async (req, res) => {
     const decodedToken = await admin.auth().verifyIdToken(idToken);
     const uid = decodedToken.uid;
 
-    const snapshot = await admin.database().ref(`users/${uid}`).once("value");
-    if (!snapshot.exists()) {
+    const userRef = db.collection("users").doc(uid);
+    const userSnap = await userRef.get();
+    if (!userSnap.exists) {
       return res.status(404).json({ message: "User tidak ditemukan" });
     }
 
-    const userData = snapshot.val();
-    return res.status(200).json({ message: "Login berhasil", user: userData });
+    const userData = userSnap.data();
+    return res.status(200).json({ message: "Login berhasil", user: { ...userData, uid } });
 
   } catch (error) {
     console.error("LOGIN ERROR:", error);
@@ -72,18 +78,9 @@ router.post("/login", async (req, res) => {
 // =========================
 // UPDATE PROFILE
 // =========================
-router.post("/update-profile", async (req, res) => {
+router.post("/update-profile", verifyUser, async (req, res) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({ message: "No token provided" });
-    }
-
-    const idToken = authHeader.split(" ")[1];
-
-    // Verifikasi token
-    const decodedToken = await admin.auth().verifyIdToken(idToken);
-    const uid = decodedToken.uid;
+    const uid = req.user ? req.user.uid : null;
 
     if (!uid) {
       return res.status(401).json({ message: "Invalid token" });
@@ -95,12 +92,12 @@ router.post("/update-profile", async (req, res) => {
       return res.status(400).json({ message: "Data tidak lengkap" });
     }
 
-    // Simpan ke Realtime Database
-    await admin.database().ref(`users/${uid}`).update({
+    // Simpan ke Firestore
+    await db.collection("users").doc(uid).set({
       ...data,
       updatedAt: new Date().toISOString(),
       profileCompleted: true,
-    });
+    }, { merge: true });
 
     res.json({ message: "Profile updated", user: { uid, ...data } });
   } catch (err) {
@@ -118,8 +115,9 @@ router.get("/:uid", verifyUser, async (req, res) => {
   try {
     const { uid } = req.params;
 
-    const snapshot = await admin.database().ref(`users/${uid}`).once("value");
-    const userData = snapshot.val();
+    const userRef = db.collection("users").doc(uid);
+    const userSnap = await userRef.get();
+    const userData = userSnap.data();
 
     if (!userData) {
       return res.status(404).json({ message: "User tidak ditemukan" });

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Search, Loader, Check, AlertCircle, ArrowRight } from 'lucide-react';
+import { Search, Loader, Check, AlertCircle, ArrowRight, Plus, X, Coffee, Sun, Moon, Cookie } from 'lucide-react';
+import { saveUserLog, fetchUserLogByDate, getDateKey } from '../services/logger';
 
 export interface FoodDetail {
   name: string;
@@ -20,6 +21,8 @@ const AISearch: React.FC<FoodSearchProps> = ({ onSelectFood }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [addedFood, setAddedFood] = useState<string | null>(null);
+  const [showMealTypeModal, setShowMealTypeModal] = useState(false);
+  const [tempSelectedFood, setTempSelectedFood] = useState<FoodDetail | null>(null);
 
   const handleSearch = async () => {
     if (searchQuery.trim() === '') return;
@@ -27,8 +30,6 @@ const AISearch: React.FC<FoodSearchProps> = ({ onSelectFood }) => {
     setIsLoading(true);
     setError(null);
     setSearchResults([]);
-
-    const apiUrl = "/.netlify/functions/ai-chat";
 
     const prompt = `
       Sebagai ahli nutrisi, berikan informasi nutrisi lengkap untuk makanan: '${searchQuery}'.
@@ -51,50 +52,149 @@ const AISearch: React.FC<FoodSearchProps> = ({ onSelectFood }) => {
       ]
     `;
 
-    const body = {
-      model: "google/gemini-2.0-flash-001",
-      messages: [{ role: "user", content: prompt }],
-      response_format: { type: "json_object" }
-    };
-
     try {
-      const response = await fetch(apiUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body)
-      });
+      const { callAi, parseJsonLike } = await import('../utils/aiClient');
+      // Use Groq model name to route to Groq backend
+      const data = await callAi([{ role: 'user', content: prompt }], 'llama3-8b-8192');
 
-      if (!response.ok) throw new Error("Gagal mengambil data.");
+      if (data.offline) {
+        // If backend provided structured offline nutrition estimates, use them
+        if (Array.isArray((data as any).offline_nutrition) && (data as any).offline_nutrition.length > 0) {
+          const foods = (data as any).offline_nutrition.map((it: any) => ({
+            name: it.name || 'Unknown',
+            calories: Number(it.calories || 0),
+            protein: Number(it.protein || 0),
+            carbs: Number(it.carbs || it.carbohydrates || 0),
+            fat: Number(it.fat || 0),
+            servingSize: it.servingSize || it.serving || ''
+          }));
+          setSearchResults(foods);
+          return;
+        }
 
-      const data = await response.json();
-      let cleanedText = data.choices?.[0]?.message?.content || "";
-      
-      // Bersihkan markdown jika ada
-      cleanedText = cleanedText.replace(/```json/g, '').replace(/```/g, '').trim();
-      
-      // Pastikan format array
-      if (cleanedText.startsWith('{')) cleanedText = `[${cleanedText}]`;
-      const start = cleanedText.indexOf('[');
-      const end = cleanedText.lastIndexOf(']');
-      if (start !== -1 && end !== -1) cleanedText = cleanedText.substring(start, end + 1);
+        setError("AI Offline: " + (data.reply || 'Coba lagi nanti.'));
+        return;
+      }
 
-      const foods: FoodDetail[] = JSON.parse(cleanedText);
+      const rawContent = data.reply ?? "";
+      let normalized = rawContent;
+      if (typeof rawContent !== 'string') normalized = JSON.stringify(rawContent);
+
+      // Defensive parsing pipeline using parseJsonLike and progressive sanitization
+      let parsed: any = parseJsonLike(normalized);
+      if (!parsed) {
+        // Strip code fences and trim
+        let cleanedText = String(normalized).replace(/```json/g, '').replace(/```/g, '').trim();
+        // If single object, wrap into array for consistency
+        if (cleanedText.startsWith('{')) cleanedText = `[${cleanedText}]`;
+        const start = cleanedText.indexOf('[');
+        const end = cleanedText.lastIndexOf(']');
+        if (start !== -1 && end !== -1) cleanedText = cleanedText.substring(start, end + 1);
+
+        // First attempt: parse using helper
+        parsed = parseJsonLike(cleanedText);
+
+        // Fallback attempts: try replacing single quotes with double quotes
+        if (!parsed) {
+          try {
+            const doubleQuoted = cleanedText.replace(/'/g, '"');
+            parsed = parseJsonLike(doubleQuoted);
+          } catch (e) {
+            // ignore
+          }
+        }
+
+        // Fallback: quote unquoted keys (simple heuristic)
+        if (!parsed) {
+          try {
+            const keyed = cleanedText.replace(/([{,]\s*)([A-Za-z0-9_\-]+)\s*:/g, '$1"$2":');
+            parsed = parseJsonLike(keyed);
+          } catch (e) {
+            // ignore
+          }
+        }
+
+        // If still not parsed, include small snippet for error reporting
+        if (!parsed) {
+          console.error('[FoodSearch] Failed to parse AI response as JSON array', { rawContent, cleanedText: String(normalized).slice(0, 800) });
+          throw new Error('Unable to parse AI response as JSON array. Raw snippet: ' + String(normalized).slice(0, 800));
+        }
+      }
+
+      // If parsed is a single object, wrap in array
+      let foodsData: any[] = [];
+      if (Array.isArray(parsed)) foodsData = parsed;
+      else if (typeof parsed === 'object' && parsed !== null) foodsData = [parsed];
+      else throw new Error('Parsed AI response is not an object or array.');
+
+      // Validate items
+      const foods: FoodDetail[] = foodsData.map((it: any) => ({
+        name: it.name || it.nama || 'Unknown',
+        calories: Number(it.calories || it.kcal || 0),
+        protein: Number(it.protein || 0),
+        carbs: Number(it.carbs || it.carbohydrates || 0),
+        fat: Number(it.fat || 0),
+        servingSize: it.servingSize || it.serving || it.porsi || ''
+      }));
+
       setSearchResults(foods);
 
     } catch (err: any) {
-      setError("Gagal mencari makanan.");
+      console.error('[FoodSearch] search error', err);
+      setError("Gagal mencari makanan. " + (err && err.message ? err.message : 'Coba lagi nanti.'));
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleAddFood = (food: FoodDetail) => {
+  const handleAddClick = (food: FoodDetail) => {
     if (onSelectFood) {
       onSelectFood(food);
       setAddedFood(food.name);
       setTimeout(() => setAddedFood(null), 1500); 
+    } else {
+      // Standalone mode: Show modal to select meal type
+      setTempSelectedFood(food);
+      setShowMealTypeModal(true);
+    }
+  };
+
+  const confirmAddToMeal = async (mealType: 'Sarapan' | 'MakanSiang' | 'MakanMalam' | 'snacks') => {
+    if (!tempSelectedFood) return;
+
+    try {
+      const dateKey = getDateKey();
+      
+      // 1. Fetch existing log to append (Prevent overwrite)
+      const existingLog: any = await fetchUserLogByDate('meal', dateKey);
+      const currentFoods = Array.isArray(existingLog?.foods) ? existingLog.foods : [];
+
+      // 2. Prepare new food item
+      const newFood = {
+        id: `f-${Date.now()}`,
+        name: tempSelectedFood.name,
+        calories: tempSelectedFood.calories,
+        protein: tempSelectedFood.protein,
+        carbs: tempSelectedFood.carbs,
+        fat: tempSelectedFood.fat,
+        portions: tempSelectedFood.servingSize,
+        mealType: mealType,
+        source: 'manual',
+        consumed: false // Default to planned
+      };
+
+      // 3. Save to Firestore using Global Helper
+      const updatedFoods = [...currentFoods, newFood];
+      await saveUserLog('meal', { foods: updatedFoods }, dateKey);
+
+
+      setAddedFood(tempSelectedFood.name);
+      setTimeout(() => setAddedFood(null), 1500);
+      setShowMealTypeModal(false);
+      setTempSelectedFood(null);
+    } catch (e) {
+      console.error("Gagal menyimpan ke meal plan:", e);
+      setError("Gagal menyimpan data.");
     }
   };
 
@@ -133,7 +233,7 @@ const AISearch: React.FC<FoodSearchProps> = ({ onSelectFood }) => {
               {isLoading ? (
                 <Loader className="h-4 w-4 animate-spin" />
               ) : (
-                <ArrowRight className="h-4 w-4" />
+                <Search className="h-4 w-4" />
               )}
             </button>
           </div>
@@ -174,14 +274,14 @@ const AISearch: React.FC<FoodSearchProps> = ({ onSelectFood }) => {
               </div>
               
               <button
-                onClick={() => handleAddFood(food)}
+                onClick={() => handleAddClick(food)}
                 className={`shrink-0 w-8 h-8 flex items-center justify-center rounded-full transition-all ${
                   addedFood === food.name 
                     ? 'bg-green-500 text-white' 
                     : 'bg-gray-100 text-gray-400 hover:bg-green-100 hover:text-green-600'
                 }`}
               >
-                {addedFood === food.name ? <Check size={16} /> : <span className="text-lg font-light leading-none mb-0.5">+</span>}
+                {addedFood === food.name ? <Check size={16} /> : <Plus size={18} />}
               </button>
             </div>
           ))
@@ -195,6 +295,49 @@ const AISearch: React.FC<FoodSearchProps> = ({ onSelectFood }) => {
           )
         )}
       </div>
+
+      {/* --- MODAL PILIH WAKTU MAKAN (Standalone Mode) --- */}
+      {showMealTypeModal && tempSelectedFood && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-2xl shadow-xl p-5 animate-in fade-in zoom-in duration-200">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-gray-800">Tambahkan ke...</h3>
+              <button onClick={() => setShowMealTypeModal(false)} className="p-1 hover:bg-gray-100 rounded-full">
+                <X size={20} className="text-gray-500" />
+              </button>
+            </div>
+            
+            <div className="mb-4 p-3 bg-green-50 rounded-xl border border-green-100 flex items-center gap-3">
+               <div className="bg-white p-2 rounded-full shadow-sm">
+                  <Check size={16} className="text-green-600" />
+               </div>
+               <div>
+                  <p className="text-xs text-gray-500">Item dipilih:</p>
+                  <p className="font-bold text-gray-800 text-sm line-clamp-1">{tempSelectedFood.name}</p>
+               </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <button onClick={() => confirmAddToMeal('Sarapan')} className="flex flex-col items-center justify-center p-3 border rounded-xl hover:bg-orange-50 hover:border-orange-200 transition-all gap-2">
+                <Coffee size={24} className="text-orange-500" />
+                <span className="text-xs font-medium text-gray-700">Sarapan</span>
+              </button>
+              <button onClick={() => confirmAddToMeal('MakanSiang')} className="flex flex-col items-center justify-center p-3 border rounded-xl hover:bg-yellow-50 hover:border-yellow-200 transition-all gap-2">
+                <Sun size={24} className="text-yellow-500" />
+                <span className="text-xs font-medium text-gray-700">Makan Siang</span>
+              </button>
+              <button onClick={() => confirmAddToMeal('MakanMalam')} className="flex flex-col items-center justify-center p-3 border rounded-xl hover:bg-blue-50 hover:border-blue-200 transition-all gap-2">
+                <Moon size={24} className="text-blue-500" />
+                <span className="text-xs font-medium text-gray-700">Makan Malam</span>
+              </button>
+              <button onClick={() => confirmAddToMeal('snacks')} className="flex flex-col items-center justify-center p-3 border rounded-xl hover:bg-purple-50 hover:border-purple-200 transition-all gap-2">
+                <Cookie size={24} className="text-purple-500" />
+                <span className="text-xs font-medium text-gray-700">Snack</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,7 +1,9 @@
 export interface User {
+  fullname: string;
   id: string;
   name: string;
   email: string;
+  photoURL?: string;
   age: number;
   gender: 'male' | 'female';
   height: number; // in cm

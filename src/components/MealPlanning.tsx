@@ -1,7 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, ChevronLeft, ChevronRight, Check, Sparkles, Info, Loader, RefreshCw, X, Trash2 } from 'lucide-react';
-import { useNutrition } from '../context/NutritionContext'; // Pastikan path ini benar
-import AISearch from './FoodSearch'; // Pastikan path ini benar
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { Plus, ChevronLeft, ChevronRight, Check, Sparkles, Loader, RefreshCw, X, Trash2 } from 'lucide-react';
+import { useNutrition } from '../context/NutritionContext';
+import AISearch from './FoodSearch';
+
+import { auth } from '../firebase';
+import { getUserProfile } from '../services/firestore';
+import { saveUserLog, fetchUserLogByDate, getDateKey } from '../services/logger';
 
 // --- Types Interfaces ---
 interface User {
@@ -27,6 +31,7 @@ interface Food {
 }
 
 interface AIMeal {
+  id?: string;
   menu: string;
   calories: number;
   protein: number;
@@ -38,198 +43,343 @@ interface AIMeal {
 }
 
 interface AIMealPlan {
-  Sarapan: AIMeal;
-  MakanSiang: AIMeal;
-  MakanMalam: AIMeal;
-  snacks?: AIMeal;
+  Sarapan: AIMeal[];
+  MakanSiang: AIMeal[];
+  MakanMalam: AIMeal[];
+  snacks?: AIMeal[];
   totalCalories: number;
   nutritionTips?: string;
   hydrationGoal?: string;
 }
 
 type MealType = 'Sarapan' | 'MakanSiang' | 'MakanMalam' | 'snacks';
+const MEAL_TYPES: MealType[] = ['Sarapan', 'MakanSiang', 'MakanMalam', 'snacks'];
+
+// --- HELPER FUNCTIONS (OUTSIDE COMPONENT) ---
+const getFoodUniqueId = (foodId: string, mealType: string, date: Date): string => {
+  const isCustom = foodId.startsWith('f-');
+  const prefix = isCustom ? 'custom' : 'ai';
+  return `${prefix}-${foodId}-${mealType}-${getDateKey(date)}`;
+};
+
+const normalizeAIMealPlan = (plan: any): AIMealPlan => {
+    const out: any = { ...plan };
+    MEAL_TYPES.forEach((type) => {
+      const value = out[type];
+      let arr: any[] = [];
+      if (!value) arr = [];
+      else if (Array.isArray(value)) arr = value;
+      else arr = [value];
+
+      out[type] = arr.map((m: any, idx: number) => ({
+        id: m.id ?? `ai-${type}-${idx}`,
+        menu: m.menu ?? m.name ?? '',
+        calories: Number(m.calories ?? m.kalori ?? m.energy ?? 0),
+        protein: Number(m.protein ?? m.proteins ?? 0),
+        carbs: Number(m.carbs ?? m.karbohidrat ?? m.carbohydrate ?? 0),
+        fat: Number(m.fat ?? m.lemak ?? 0),
+        time: m.time ?? '',
+        reasoning: m.reasoning ?? '',
+        portions: m.portions ?? ''
+      }));
+    });
+    return out as AIMealPlan;
+  };
 
 const MealPlanning: React.FC = () => {
   // --- STATE ---
-  const [user, setUser] = useState<User>({
-    weight: 70, height: 170, age: 25, gender: 'pria', goal: 'maintain-weight', activityLevel: 'moderate', dailyCalories: 2000, dietaryRestrictions: [], allergies: []
-  });
-
+  const [user, setUser] = useState<User | null>(null);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedMeal, setSelectedMeal] = useState<MealType>('Sarapan');
   const [aiMealPlan, setAiMealPlan] = useState<AIMealPlan | null>(null);
   const [consumedFoods, setConsumedFoods] = useState<string[]>([]);
   
-  // State untuk Menu Manual (Sekarang disimpan LocalStorage)
-  const [customMealPlan, setCustomMealPlan] = useState({
-    Sarapan: [] as Food[],
-    MakanSiang: [] as Food[],
-    MakanMalam: [] as Food[],
-    snacks: [] as Food[]
+  const [customMealPlan, setCustomMealPlan] = useState<{ [key in MealType]: Food[] }>({
+    Sarapan: [], MakanSiang: [], MakanMalam: [], snacks: []
   });
   
-  // UI states
   const [showFoodSelector, setShowFoodSelector] = useState(false);
-  const [showAiRecommendations, setShowAiRecommendations] = useState(true);
   const [isLoadingAI, setIsLoadingAI] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [isDataLoading, setIsDataLoading] = useState(true);
   
   const { updateNutrition } = useNutrition();
 
-  // --- UTILITY ---
-  const formatDateKey = (date: Date): string => date.toISOString().split('T')[0];
-  const getCurrentDateKey = (): string => formatDateKey(currentDate);
+  // --- DATA SYNC & PERSISTENCE LOGIC ---
+  const saveMealDataToFirestore = useCallback(async (
+    updatedCustomMeals: { [key in MealType]: Food[] },
+    updatedAiPlan: AIMealPlan | null,
+    updatedConsumed: string[]
+  ) => {
+    if (!auth.currentUser || !user) return;
 
-  // --- LOAD DATA (Effect Awal) ---
-  useEffect(() => {
-    // 1. Load User (Lengkap dengan dietary restrictions dan allergies)
-    const storedUser = localStorage.getItem('user');
-    if (storedUser) {
-      try {
-        const parsed = JSON.parse(storedUser);
-        setUser({
-          weight: parsed.weight || 70,
-          height: parsed.height || 170,
-          age: parsed.age || 25,
-          gender: parsed.gender || 'pria',
-          goal: parsed.goal || 'maintain-weight',
-          activityLevel: parsed.activityLevel || 'moderate',
-          dailyCalories: parsed.dailyCalories || 2000,
-          dietaryRestrictions: parsed.dietaryRestrictions || [],
-          allergies: parsed.allergies || []
+    const dateKey = getDateKey(currentDate);
+    const allFoods: any[] = [];
+    
+    Object.entries(updatedCustomMeals).forEach(([type, items]) => {
+      items.forEach(item => allFoods.push({ ...item, mealType: type, source: 'manual', consumed: updatedConsumed.includes(getFoodUniqueId(item.id, type, currentDate)) }));
+    });
+
+    if (updatedAiPlan) {
+      MEAL_TYPES.forEach(type => {
+        updatedAiPlan[type]?.forEach(item => {
+          if (!item || !item.id) return;
+          allFoods.push({ ...item, name: item.menu, mealType: type, source: 'ai', consumed: updatedConsumed.includes(getFoodUniqueId(item.id, type, currentDate)) });
         });
-      } catch (e) {
-        console.error('Error parsing user data:', e);
-      }
+      });
     }
 
-    // 2. Load UI Preference (Terakhir pakai AI atau Manual?)
-    const savedMode = localStorage.getItem('meal-plan-mode');
-    if (savedMode) setShowAiRecommendations(savedMode === 'ai');
+    // Recalculate nutrition here before saving
+    let total = { calories: 0, protein: 0, carbs: 0, fat: 0 };
+    allFoods.filter(f => f.consumed).forEach(f => {
+        total.calories += f.calories || 0;
+        total.protein += f.protein || 0;
+        total.carbs += f.carbs || 0;
+        total.fat += f.fat || 0;
+    });
+
+    const payload = {
+        userId: auth.currentUser.uid,
+        foods: allFoods,
+        totalCalories: total.calories,
+        date: dateKey,
+        nutritionTips: updatedAiPlan?.nutritionTips || '',
+        hydrationGoal: updatedAiPlan?.hydrationGoal || '',
+    };
+
+    try {
+      await saveUserLog('meal', payload, dateKey);
+      updateNutrition({ ...total, date: dateKey });
+    } catch (e) {
+      console.error("Failed to save meal log:", e);
+    }
+  }, [currentDate, user, updateNutrition]);
+
+  // --- MEMOIZED VALUES ---
+  const consumedNutrition = useMemo(() => {
+    let total = { calories: 0, protein: 0, carbs: 0, fat: 0 };
+    if (!user) return total;
+
+    MEAL_TYPES.forEach(type => {
+        aiMealPlan?.[type]?.forEach(meal => {
+            if (meal?.id && consumedFoods.includes(getFoodUniqueId(meal.id, type, currentDate))) {
+                total.calories += meal.calories || 0;
+                total.protein += meal.protein || 0;
+                total.carbs += meal.carbs || 0;
+                total.fat += meal.fat || 0;
+            }
+        });
+        customMealPlan[type]?.forEach(food => {
+            if (consumedFoods.includes(getFoodUniqueId(food.id, type, currentDate))) {
+                total.calories += food.calories || 0;
+                total.protein += food.protein || 0;
+                total.carbs += food.carbs || 0;
+                total.fat += food.fat || 0;
+            }
+        });
+    });
+    return total;
+  }, [user, aiMealPlan, customMealPlan, consumedFoods, currentDate]);
+
+  const calorieProgress = useMemo(() => 
+    user && user.dailyCalories > 0 
+      ? Math.min(100, (consumedNutrition.calories / user.dailyCalories) * 100) 
+      : 0,
+    [consumedNutrition.calories, user]
+  );
+
+  // --- HANDLERS (with immediate persistence) ---
+  const isFoodConsumed = useCallback((foodId: string, mealType: string): boolean => {
+    return consumedFoods.includes(getFoodUniqueId(foodId, mealType, currentDate));
+  }, [consumedFoods, currentDate]);
+
+  const toggleFoodConsumed = useCallback(async (foodId: string, mealType: string): Promise<void> => {
+    const uniqueId = getFoodUniqueId(foodId, mealType, currentDate);
+    const newConsumed = consumedFoods.includes(uniqueId)
+      ? consumedFoods.filter(id => id !== uniqueId)
+      : [...consumedFoods, uniqueId];
+    
+    setConsumedFoods(newConsumed);
+    await saveMealDataToFirestore(customMealPlan, aiMealPlan, newConsumed);
+  }, [currentDate, consumedFoods, customMealPlan, aiMealPlan, saveMealDataToFirestore]);
+
+  const addFoodToMeal = useCallback(async (food: Food) => {
+    const newCustomMealPlan = { 
+      ...customMealPlan, 
+      [selectedMeal]: [...customMealPlan[selectedMeal], { ...food, id: `f-${Date.now()}` }] 
+    };
+    setCustomMealPlan(newCustomMealPlan);
+    await saveMealDataToFirestore(newCustomMealPlan, aiMealPlan, consumedFoods);
+  }, [selectedMeal, customMealPlan, aiMealPlan, consumedFoods, saveMealDataToFirestore]);
+
+  const removeFoodFromMeal = useCallback(async (foodId: string, mealType: MealType) => {
+    const newCustomMealPlan = { 
+      ...customMealPlan, 
+      [mealType]: customMealPlan[mealType].filter(f => f.id !== foodId) 
+    };
+    const uniqueId = getFoodUniqueId(foodId, mealType, currentDate);
+    const newConsumed = consumedFoods.filter(id => id !== uniqueId);
+
+    setCustomMealPlan(newCustomMealPlan);
+    setConsumedFoods(newConsumed);
+    await saveMealDataToFirestore(newCustomMealPlan, aiMealPlan, newConsumed);
+  }, [currentDate, customMealPlan, aiMealPlan, consumedFoods, saveMealDataToFirestore]);
+
+
+  // --- DATA FETCHING EFFECTS ---
+  useEffect(() => {
+    const fetchInitialData = async () => {
+        if (!auth.currentUser) {
+            setIsDataLoading(false);
+            // Optional: redirect to login if needed
+            return;
+        }
+        setIsDataLoading(true);
+        try {
+            const userProfile = await getUserProfile(auth.currentUser.uid);
+            if (userProfile) {
+                setUser(userProfile as User);
+            } else {
+                // Handle case where profile doesn't exist, maybe redirect to onboarding
+                setUser(null);
+            }
+        } catch (error) {
+            console.error("Failed to fetch user profile:", error);
+            setUser(null);
+        }
+    };
+    fetchInitialData();
   }, []);
 
-  // --- LOAD DAILY DATA (Saat Tanggal Berubah) ---
   useEffect(() => {
-    const dateKey = getCurrentDateKey();
+    if (!user) return; // Don't load meals until user is fetched
 
-    // 1. Load Consumed IDs (Checklist)
-    const savedConsumed = JSON.parse(localStorage.getItem(`consumed-${dateKey}`) || '[]');
-    setConsumedFoods(savedConsumed);
-
-    // 2. Load Custom Meal Plan (PENTING: Agar menu manual tidak hilang saat refresh)
-    const savedCustom = localStorage.getItem(`custom-meal-${dateKey}`);
-    if (savedCustom) {
-      setCustomMealPlan(JSON.parse(savedCustom));
-    } else {
+    const loadDailyData = async () => {
+      setIsDataLoading(true);
+      const dateKey = getDateKey(currentDate);
+      
+      // Reset state for the new day
+      setConsumedFoods([]);
       setCustomMealPlan({ Sarapan: [], MakanSiang: [], MakanMalam: [], snacks: [] });
-    }
+      setAiMealPlan(null);
+      
+      if (auth.currentUser) {
+        try {
+          const data: any = await fetchUserLogByDate('meal', dateKey);
 
-    // 3. Load AI Plan (Agar tidak generate ulang terus menerus jika sudah ada hari ini)
-    const savedAI = localStorage.getItem(`ai-meal-${dateKey}`);
-    if (savedAI) {
-      setAiMealPlan(JSON.parse(savedAI));
-    } else {
-      setAiMealPlan(null); // Reset jika belum ada, nanti akan trigger generate
-    }
-  }, [currentDate]);
+          if (data && Array.isArray(data.foods)) {
+            const newCustomPlan: { [key in MealType]: Food[] } = { Sarapan: [], MakanSiang: [], MakanMalam: [], snacks: [] };
+            const newAiItems: { [key in MealType]: AIMeal[] } = { Sarapan: [], MakanSiang: [], MakanMalam: [], snacks: [] };
+            const newConsumed: string[] = [];
+            let hasAiItems = false;
 
-  // --- SAVE CUSTOM MEAL PLAN ---
+            data.foods.forEach((f: any) => {
+              const mealType = f.mealType as MealType;
+              if (!mealType || !MEAL_TYPES.includes(mealType)) return;
+
+              const fId = f.id || `restored-${Math.random()}`;
+              if (f.consumed) {
+                newConsumed.push(getFoodUniqueId(fId, mealType, currentDate));
+              }
+
+              if (f.source === 'ai') {
+                hasAiItems = true;
+                newAiItems[mealType].push({ ...f, menu: f.name, id: fId });
+              } else {
+                newCustomPlan[mealType].push({ ...f, servingSize: f.portions || f.servingSize, id: fId });
+              }
+            });
+
+            setCustomMealPlan(newCustomPlan);
+            setConsumedFoods(newConsumed);
+            if (hasAiItems) {
+              setAiMealPlan({
+                Sarapan: newAiItems.Sarapan,
+                MakanSiang: newAiItems.MakanSiang,
+                MakanMalam: newAiItems.MakanMalam,
+                snacks: newAiItems.snacks,
+                totalCalories: data.totalCalories || 0,
+                nutritionTips: data.nutritionTips || '',
+                hydrationGoal: data.hydrationGoal || ''
+              });
+            }
+          }
+        } catch (error) {
+          console.error("Error loading meal log:", error);
+        }
+      }
+      setIsDataLoading(false);
+    };
+
+    loadDailyData();
+  }, [user, currentDate]); // Re-fetch when user or date changes
+
+  // Update nutrition context whenever consumedNutrition changes
   useEffect(() => {
-    const dateKey = getCurrentDateKey();
-    localStorage.setItem(`custom-meal-${dateKey}`, JSON.stringify(customMealPlan));
-  }, [customMealPlan, currentDate]);
+    if (user) {
+        const dateKey = getDateKey(currentDate);
+        updateNutrition({ ...consumedNutrition, date: dateKey });
+    }
+  }, [user, consumedNutrition, currentDate, updateNutrition]);
 
-  // --- LOGIKA AI (Generate) ---
-  const generateAIMealPlan = async (): Promise<void> => {
-    const dateKey = getCurrentDateKey();
-    // Jika sudah ada plan di localstorage hari ini, jangan fetch ulang (hemat kuota AI)
-    if (localStorage.getItem(`ai-meal-${dateKey}`)) return;
-
+  const generateAIMealPlan = useCallback(async (): Promise<void> => {
+    if (!user) {
+        setAiError("User profile not loaded. Cannot generate meal plan.");
+        return;
+    }
     setIsLoadingAI(true);
     setAiError(null);
   
-    const apiUrl = "/.netlify/functions/ai-chat"; 
-  
-    // Format dietary restrictions dan allergies dengan baik
-    const dietaryInfo = user.dietaryRestrictions && user.dietaryRestrictions.length > 0 
-      ? `Pantangan diet: ${user.dietaryRestrictions.join(', ')}` 
-      : 'Tidak ada pantangan diet khusus';
+    const profileForAI = { ...user };
+    const variationSeed = Math.floor(Math.random() * 10000);
+    const proteinTargetHint = profileForAI.goal === 'muscle-gain' 
+      ? `Tinggi Protein (~${Math.round(profileForAI.weight * 1.8)}g total)` 
+      : `Protein Seimbang (~${Math.round(profileForAI.weight * 1.2)}g total)`;
     
-    const allergiesInfo = user.allergies && user.allergies.length > 0 
-      ? `Alergi: ${user.allergies.join(', ')}. HARUS hindari makanan ini sepenuhnya!` 
-      : 'Tidak ada alergi';
-
     const prompt = `
-    Bertindaklah sebagai ahli gizi profesional yang berpengalaman. Buat rencana makan harian Indonesia yang sehat, mudah didapat, dan DISESUAIKAN dengan profil user.
-    
-    PROFIL USER:
-    - Usia: ${user.age} tahun
-    - Gender: ${user.gender === 'pria' ? 'Laki-laki' : 'Perempuan'}
-    - Tinggi: ${user.height} cm
-    - Berat: ${user.weight} kg
-    - Target Kalori Harian: ${user.dailyCalories} kcal
-    - Level Aktivitas: ${user.activityLevel}
-    - Tujuan: ${user.goal === 'weight-loss' ? 'Penurunan Berat Badan' : user.goal === 'weight-gain' ? 'Penambahan Berat Badan' : user.goal === 'muscle-gain' ? 'Penambahan Otot' : 'Mempertahankan Berat Badan'}
-    - ${dietaryInfo}
-    - ${allergiesInfo}
-    
-    PENTING: Menu HARUS sesuai dengan pantangan diet dan alergi. Jangan rekomendasikan makanan yang mengandung alergen.
-    
-    Output JSON Valid:
+    Kamu adalah Ahli Gizi Dietetik profesional dengan spesialisasi kuliner nusantara.
+    TUGAS: Buatkan 1 set rencana makan harian Indonesia yang variatif dan sehat. Gunakan Variation Seed: ${variationSeed} untuk menu UNIK.
+    OUTPUT WAJIB JSON VALID. TANPA PREAMBLE, TANPA PENJELASAN TEKS DI LUAR JSON.
+    ATURAN KONTEN:
+    1. VARIASI: Setiap refresh WAJIB menghasilkan menu berbeda.
+    2. PORSI DETAIL: Field "portions" WAJIB sangat spesifik (contoh: "100g Nasi Merah, 1 butir Telur Rebus").
+    3. KELENGKapan NUTRISI: Target Harian: ${profileForAI.dailyCalories} kcal, ${proteinTargetHint}. Jika kurang protein, WAJIB tambahkan "Side Dish".
+    4. REASONING MENDALAM: Jelaskan kaitan menu dengan target user (${profileForAI.goal}).
+    5. STRUKTUR: 1 kategori = 1 menu (Single Object).
+    6. PANTANGAN & ALERGI (MUTLAK): JANGAN PERNAH menyertakan bahan dari pantangan atau alergi user.
+    STRUKTUR JSON:
     {
-      "Sarapan": { "menu": "...", "calories": 400, "protein": 15, "carbs": 45, "fat": 12, "time": "07:00", "reasoning": "...", "portions": "..." },
-      "MakanSiang": { "menu": "...", "calories": 700, "protein": 30, "carbs": 80, "fat": 20, "time": "13:00", "reasoning": "...", "portions": "..." },
-      "MakanMalam": { "menu": "...", "calories": 500, "protein": 25, "carbs": 55, "fat": 15, "time": "19:00", "reasoning": "...", "portions": "..." },
-      "snacks": { "menu": "...", "calories": 200, "protein": 8, "carbs": 25, "fat": 6, "time": "16:00", "reasoning": "...", "portions": "..." },
-      "totalCalories": 1800,
-      "nutritionTips": "...",
-      "hydrationGoal": "..."
+      "Sarapan": {"id":"b-${variationSeed}","menu":"Nama Menu","calories":0,"protein":0,"carbs":0,"fat":0,"time":"07:00","reasoning":"...","portions":"..."},
+      "MakanSiang": {"id":"l-${variationSeed}","menu":"Nama Menu","calories":0,"protein":0,"carbs":0,"fat":0,"time":"12:00","reasoning":"...","portions":"..."},
+      "MakanMalam": {"id":"d-${variationSeed}","menu":"Nama Menu","calories":0,"protein":0,"carbs":0,"fat":0,"time":"18:00","reasoning":"...","portions":"..."},
+      "snacks": {"id":"s-${variationSeed}","menu":"Nama Menu","calories":0,"protein":0,"carbs":0,"fat":0,"time":"16:00","reasoning":"...","portions":"..."},
+      "totalCalories": ${profileForAI.dailyCalories},
+      "nutritionTips": "Berikan tips spesifik terkait menu hari ini",
+      "hydrationGoal": "Minimal 8 Gelas (2.5L)"
     }
-    `;
+    PROFIL USER:
+    - Usia: ${profileForAI.age} | Gender: ${profileForAI.gender}
+    - BB: ${profileForAI.weight}kg | TB: ${profileForAI.height}cm
+    - Aktivitas: ${profileForAI.activityLevel}
+    - Target Utama: ${profileForAI.goal}
+    - Pantangan: ${(profileForAI.dietaryRestrictions || []).join(', ') || '-'}
+    - Alergi: ${(profileForAI.allergies || []).join(', ') || '-'}`;
 
     try {
-      const response = await fetch(apiUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          "model": "google/gemini-2.0-flash-001",
-          "messages": [{ "role": "user", "content": prompt }],
-          "response_format": { "type": "json_object" }
-        }),
-      });
+      const { callAi, parseJsonLike } = await import('../utils/aiClient');
+      const data = await callAi([{ role: 'user', content: prompt }], 'llama-3.1-8b-instant');
 
-      if (!response.ok) throw new Error("API Error: " + response.status);
-      const data = await response.json();
-      console.log('AI raw response:', data);
-
-      // openrouter / LM providers sometimes return the JSON object directly
-      // or return a string containing JSON. Support both.
-      const rawContent = data.choices?.[0]?.message?.content ?? data.choices?.[0]?.message ?? data.choices?.[0]?.content ?? null;
-      if (!rawContent) throw new Error("Respon kosong dari AI");
-
-      let parsedPlan: AIMealPlan | null = null;
-
-      if (typeof rawContent === 'string') {
-        // try direct parse, otherwise extract JSON block inside text
-        try {
-          parsedPlan = JSON.parse(rawContent);
-        } catch (e) {
-          const match = rawContent.match(/\{[\s\S]*\}/);
-          if (match) {
-            parsedPlan = JSON.parse(match[0]);
-          }
-        }
-      } else if (typeof rawContent === 'object') {
-        parsedPlan = rawContent as AIMealPlan;
+      if (data.offline || !data.reply) {
+        throw new Error(data.reply || 'AI is offline or returned an empty response.');
       }
 
-      if (!parsedPlan) throw new Error('Gagal mem-parsing response AI');
+      const parsedPlanRaw = parseJsonLike(data.reply);
+      if (!parsedPlanRaw) throw new Error('Failed to parse AI response.');
 
+      const parsedPlan = normalizeAIMealPlan(parsedPlanRaw);
       setAiMealPlan(parsedPlan);
-      // Simpan hasil AI ke storage hari ini
-      localStorage.setItem(`ai-meal-${dateKey}`, JSON.stringify(parsedPlan));
+      // Immediately save the new AI plan
+      await saveMealDataToFirestore(customMealPlan, parsedPlan, consumedFoods);
 
     } catch (err: any) {
       console.error("AI Error:", err);
@@ -237,368 +387,121 @@ const MealPlanning: React.FC = () => {
     } finally {
       setIsLoadingAI(false);
     }
-  };
-
-  // Trigger AI hanya jika mode AI aktif dan belum ada data
-  useEffect(() => {
-    if (showAiRecommendations && user.dailyCalories > 0 && !aiMealPlan && !isLoadingAI) {
-       generateAIMealPlan();
-    }
-    // Simpan preferensi mode
-    localStorage.setItem('meal-plan-mode', showAiRecommendations ? 'ai' : 'manual');
-  }, [showAiRecommendations, user.dailyCalories, currentDate]);
-
-  // --- LOGIKA CONSUMED & PROGRESS ---
-  const getFoodUniqueId = (foodId: string, mealType: string): string => {
-    // ID unik kombinasi ID makanan + Tipe waktu + Tanggal
-    return `${showAiRecommendations ? 'ai' : 'custom'}-${foodId}-${mealType}-${getCurrentDateKey()}`;
-  };
-
-  const isFoodConsumed = (foodId: string, mealType: string): boolean => {
-    return consumedFoods.includes(getFoodUniqueId(foodId, mealType));
-  };
-
-  const toggleFoodConsumed = (foodId: string, mealType: string): void => {
-    const uniqueId = getFoodUniqueId(foodId, mealType);
-    const newConsumed = consumedFoods.includes(uniqueId)
-      ? consumedFoods.filter(id => id !== uniqueId)
-      : [...consumedFoods, uniqueId];
-
-    setConsumedFoods(newConsumed);
-    localStorage.setItem(`consumed-${getCurrentDateKey()}`, JSON.stringify(newConsumed));
-  };
-
-  // Hitung Total Nutrisi (Digabungkan ke Progress.tsx)
-  const calculateDailyNutrition = () => {
-    let total = { calories: 0, protein: 0, carbs: 0, fat: 0 };
-    
-    // Hitung dari AI Plan (jika ada yg dicentang)
-    if (aiMealPlan) {
-       (['Sarapan', 'MakanSiang', 'MakanMalam', 'snacks'] as MealType[]).forEach(type => {
-          const meal = aiMealPlan[type];
-          // Cek ID unik versi AI
-          const aiId = `ai-${type}-${type}-${getCurrentDateKey()}`; 
-          if (meal && consumedFoods.includes(aiId)) {
-             total.calories += meal.calories;
-             total.protein += Math.round(meal.calories * 0.25 / 4);
-             total.carbs += Math.round(meal.calories * 0.45 / 4);
-             total.fat += Math.round(meal.calories * 0.30 / 9);
-          }
-       });
-    }
-
-    // Hitung dari Custom Plan (jika ada yg dicentang)
-    Object.entries(customMealPlan).forEach(([mealType, foods]) => {
-      foods.forEach(food => {
-        // Cek ID unik versi Custom
-        const customId = `custom-${food.id}-${mealType}-${getCurrentDateKey()}`;
-        if (consumedFoods.includes(customId)) {
-          total.calories += food.calories;
-          total.protein += food.protein;
-          total.carbs += food.carbs;
-          total.fat += food.fat;
-        }
-      });
-    });
-
-    return total;
-  };
-
-  // Update Global Context & LocalStorage untuk Progress Dashboard
-  useEffect(() => {
-    const consumed = calculateDailyNutrition();
-    const dateKey = getCurrentDateKey();
-
-    updateNutrition({ ...consumed, date: dateKey });
-    
-    // Simpan agar Progress.tsx bisa baca
-    localStorage.setItem(`daily-nutrition-${dateKey}`, JSON.stringify({
-      ...consumed, date: dateKey, targetCalories: user.dailyCalories 
-    }));
-  }, [consumedFoods, aiMealPlan, customMealPlan]);
-
-  // --- HANDLER UI ---
-  const addFoodToMeal = (food: Food) => {
-    setCustomMealPlan(prev => ({ 
-      ...prev, 
-      [selectedMeal]: [...prev[selectedMeal], food] 
-    }));
-  };
-
-  const removeFoodFromMeal = (foodId: string, mealType: MealType) => {
-    setCustomMealPlan(prev => ({ 
-      ...prev, 
-      [mealType]: prev[mealType].filter(f => f.id !== foodId) 
-    }));
-    // Hapus juga status consumed-nya jika dihapus dari list
-    const uniqueId = getFoodUniqueId(foodId, mealType);
-    setConsumedFoods(prev => prev.filter(id => id !== uniqueId));
-  };
-
-  const consumedNutrition = calculateDailyNutrition();
-  const calorieProgress = user.dailyCalories > 0 
-    ? Math.min(100, (consumedNutrition.calories / user.dailyCalories) * 100) 
-    : 0;
-
-  // --- HANDLER REFRESH MENU ---
-  const handleRefreshMenu = () => {
-    const dateKey = getCurrentDateKey();
-    localStorage.removeItem(`ai-meal-${dateKey}`);
+  }, [user, customMealPlan, consumedFoods, saveMealDataToFirestore]);
+  
+  const handleRefreshMenu = useCallback(async () => {
+    // Clear out old AI meals and their consumption status
+    const newConsumed = consumedFoods.filter(id => !id.startsWith('ai-'));
     setAiMealPlan(null);
-    generateAIMealPlan();
-  };
+    setConsumedFoods(newConsumed);
+    // This will first save the cleared AI plan, then generate a new one which also saves.
+    await saveMealDataToFirestore(customMealPlan, null, newConsumed);
+    await generateAIMealPlan();
+  }, [generateAIMealPlan, consumedFoods, customMealPlan, saveMealDataToFirestore]);
+  
+  // --- RENDER LOGIC ---
+  if (isDataLoading) {
+      return <div className="min-h-screen bg-gray-50 py-8 flex justify-center items-center"><Loader className="animate-spin text-green-500" size={40} /></div>;
+  }
+  
+  if (!user) {
+      return <div className="min-h-screen bg-gray-50 py-8 flex justify-center items-center"><p className="text-red-500">Could not load user profile. Please try again later.</p></div>;
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 py-8">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         
-        {/* Header Tanggal */}
+        {/* Header and Date Navigation */}
         <div className="flex flex-col md:flex-row items-center justify-between mb-8 gap-4">
           <h1 className="text-3xl font-bold text-gray-900">Rencana Makan</h1>
           <div className="flex items-center bg-white shadow-sm rounded-lg p-1">
-            <button onClick={() => setCurrentDate(new Date(currentDate.getTime() - 86400000))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronLeft size={20}/></button>
+            <button onClick={() => setCurrentDate(d => new Date(d.getTime() - 86400000))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronLeft size={20}/></button>
             <span className="px-4 font-semibold w-32 text-center">{currentDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}</span>
-            <button onClick={() => setCurrentDate(new Date(currentDate.getTime() + 86400000))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronRight size={20}/></button>
+            <button onClick={() => setCurrentDate(d => new Date(d.getTime() + 86400000))} className="p-2 hover:bg-gray-100 rounded-full"><ChevronRight size={20}/></button>
           </div>
         </div>
 
-        {/* Toggle Mode & Refresh Button */}
+        {/* AI Action Buttons */}
         <div className="flex flex-col sm:flex-row justify-center items-center gap-4 mb-8">
-          <div className="inline-flex bg-gray-200 rounded-lg p-1">
-            <button onClick={() => setShowAiRecommendations(true)} className={`px-6 py-2 rounded-md text-sm font-medium transition-all ${showAiRecommendations ? 'bg-white text-green-600 shadow-sm' : 'text-gray-600'}`}>Rekomendasi AI</button>
-            <button onClick={() => setShowAiRecommendations(false)} className={`px-6 py-2 rounded-md text-sm font-medium transition-all ${!showAiRecommendations ? 'bg-white text-green-600 shadow-sm' : 'text-gray-600'}`}>Atur Manual</button>
-          </div>
-          {showAiRecommendations && aiMealPlan && !isLoadingAI && (
-            <button 
-              onClick={handleRefreshMenu}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg font-medium transition-colors"
-            >
+          {!aiMealPlan && !isLoadingAI && (
+             <button onClick={generateAIMealPlan} className="px-6 py-2 bg-green-600 text-white rounded-lg shadow-sm hover:bg-green-700 transition-all font-medium flex items-center gap-2">
+                <Sparkles size={18}/> Buat Rekomendasi AI
+             </button>
+          )}
+          {aiMealPlan && !isLoadingAI && (
+            <button onClick={handleRefreshMenu} className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg font-medium transition-colors">
               <RefreshCw size={16} /> Ganti Menu
             </button>
           )}
         </div>
-
-        {/* Nutrition Summary Bar - DETAILED */}
+        
+        {/* Nutrition Summary */}
         <div className="bg-white rounded-2xl shadow-sm p-6 mb-8 border border-gray-100">
-          {/* Kalori Section */}
-          <div className="mb-6">
-            <div className="grid grid-cols-3 md:grid-cols-4 gap-4 mb-3">
-              <div className="text-center">
-                <p className="text-xs text-gray-500 uppercase font-bold">Target</p>
-                <p className="text-lg md:text-xl font-bold text-gray-900">{user.dailyCalories}</p>
-                <p className="text-xs text-gray-400">kcal</p>
-              </div>
-              <div className="text-center">
-                <p className="text-xs text-gray-500 uppercase font-bold">Masuk</p>
-                <p className="text-lg md:text-xl font-bold text-green-600">{consumedNutrition.calories}</p>
-                <p className="text-xs text-gray-400">kcal</p>
-              </div>
-              <div className="text-center">
-                <p className="text-xs text-gray-500 uppercase font-bold">Sisa</p>
-                <p className="text-lg md:text-xl font-bold text-blue-600">{Math.max(0, user.dailyCalories - consumedNutrition.calories)}</p>
-                <p className="text-xs text-gray-400">kcal</p>
-              </div>
-              <div className="text-center">
-                <p className="text-xs text-gray-500 uppercase font-bold">Progress</p>
-                <p className="text-lg md:text-xl font-bold text-gray-900">{Math.round(calorieProgress)}%</p>
-                <p className="text-xs text-gray-400">dari target</p>
-              </div>
+            <div className="mb-6">
+                <div className="grid grid-cols-3 md:grid-cols-4 gap-4 mb-3">
+                    <div className="text-center"><p className="text-xs text-gray-500 uppercase font-bold">Target</p><p className="text-lg md:text-xl font-bold text-gray-900">{user.dailyCalories}</p><p className="text-xs text-gray-400">kcal</p></div>
+                    <div className="text-center"><p className="text-xs text-gray-500 uppercase font-bold">Masuk</p><p className="text-lg md:text-xl font-bold text-green-600">{consumedNutrition.calories}</p><p className="text-xs text-gray-400">kcal</p></div>
+                    <div className="text-center"><p className="text-xs text-gray-500 uppercase font-bold">Sisa</p><p className="text-lg md:text-xl font-bold text-blue-600">{Math.max(0, user.dailyCalories - consumedNutrition.calories)}</p><p className="text-xs text-gray-400">kcal</p></div>
+                    <div className="text-center"><p className="text-xs text-gray-500 uppercase font-bold">Progress</p><p className="text-lg md:text-xl font-bold text-gray-900">{Math.round(calorieProgress)}%</p><p className="text-xs text-gray-400">dari target</p></div>
+                </div>
+                <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden"><div className="h-full bg-green-500 transition-all duration-500" style={{ width: `${calorieProgress}%` }} /></div>
             </div>
-            <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
-              <div className="h-full bg-green-500 transition-all duration-500" style={{ width: `${calorieProgress}%` }} />
+            <div className="border-t pt-6">
+                <h3 className="text-sm font-bold text-gray-700 mb-4 uppercase">Rincian Makronutrisi</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div><div className="flex justify-between mb-2"><span className="text-sm font-medium text-gray-700">Protein</span><span className="text-sm font-bold text-orange-600">{consumedNutrition.protein}g</span></div><div className="h-2 bg-gray-100 rounded-full overflow-hidden"><div className="h-full bg-orange-500" style={{ width: `${Math.min(100, (consumedNutrition.protein / (user.weight * 1.5)) * 100)}%` }} /></div></div>
+                    <div><div className="flex justify-between mb-2"><span className="text-sm font-medium text-gray-700">Karbohidrat</span><span className="text-sm font-bold text-blue-600">{consumedNutrition.carbs}g</span></div><div className="h-2 bg-gray-100 rounded-full overflow-hidden"><div className="h-full bg-blue-500" style={{ width: `${Math.min(100, (consumedNutrition.carbs / (user.dailyCalories * 0.5 / 4)) * 100)}%` }} /></div></div>
+                    <div><div className="flex justify-between mb-2"><span className="text-sm font-medium text-gray-700">Lemak</span><span className="text-sm font-bold text-amber-600">{consumedNutrition.fat}g</span></div><div className="h-2 bg-gray-100 rounded-full overflow-hidden"><div className="h-full bg-amber-500" style={{ width: `${Math.min(100, (consumedNutrition.fat / (user.dailyCalories * 0.25 / 9)) * 100)}%` }} /></div></div>
+                </div>
             </div>
-          </div>
-
-          {/* Makronutrient Details */}
-          <div className="border-t pt-6">
-            <h3 className="text-sm font-bold text-gray-700 mb-4 uppercase">Rincian Makronutrisi</h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {/* Protein */}
-              <div>
-                <div className="flex justify-between mb-2">
-                  <span className="text-sm font-medium text-gray-700">Protein</span>
-                  <span className="text-sm font-bold text-orange-600">{consumedNutrition.protein}g</span>
-                </div>
-                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-orange-500 transition-all duration-500" style={{ width: `${Math.min(100, (consumedNutrition.protein / 150) * 100)}%` }} />
-                </div>
-                <p className="text-xs text-gray-400 mt-1">Target: ~150g/hari</p>
-              </div>
-
-              {/* Carbs */}
-              <div>
-                <div className="flex justify-between mb-2">
-                  <span className="text-sm font-medium text-gray-700">Karbohidrat</span>
-                  <span className="text-sm font-bold text-blue-600">{consumedNutrition.carbs}g</span>
-                </div>
-                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-blue-500 transition-all duration-500" style={{ width: `${Math.min(100, (consumedNutrition.carbs / 250) * 100)}%` }} />
-                </div>
-                <p className="text-xs text-gray-400 mt-1">Target: ~250g/hari</p>
-              </div>
-
-              {/* Fat */}
-              <div>
-                <div className="flex justify-between mb-2">
-                  <span className="text-sm font-medium text-gray-700">Lemak</span>
-                  <span className="text-sm font-bold text-amber-600">{consumedNutrition.fat}g</span>
-                </div>
-                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-amber-500 transition-all duration-500" style={{ width: `${Math.min(100, (consumedNutrition.fat / 70) * 100)}%` }} />
-                </div>
-                <p className="text-xs text-gray-400 mt-1">Target: ~70g/hari</p>
-              </div>
-            </div>
-          </div>
         </div>
 
-        {/* --- KONTEN UTAMA --- */}
-        {showAiRecommendations ? (
-          // MODE AI
-          isLoadingAI ? (
-            <div className="flex flex-col items-center justify-center py-20">
-              <Loader className="animate-spin text-green-500 mb-4" size={40} />
-              <p className="text-gray-500 text-sm">Meracik menu spesial...</p>
-            </div>
-          ) : aiError ? (
-            <div className="text-center p-8 bg-red-50 rounded-xl text-red-600">
-              <p>{aiError}</p>
-              <button onClick={() => { localStorage.removeItem(`ai-meal-${getCurrentDateKey()}`); generateAIMealPlan(); }} className="mt-2 font-bold underline">Coba Lagi</button>
-            </div>
-          ) : aiMealPlan && (
-            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-              {(['Sarapan', 'MakanSiang', 'MakanMalam', 'snacks'] as const).map((type) => {
-                const meal = aiMealPlan[type];
-                if (!meal) return null;
-                const isDone = isFoodConsumed(type, type);
-                
-                return (
-                  <div key={type} className={`bg-white p-6 rounded-2xl border transition-all ${isDone ? 'border-green-200 bg-green-50' : 'border-gray-100 shadow-sm hover:shadow-md'}`}>
-                    <div className="flex justify-between items-start mb-4">
-                      <h3 className="font-bold text-gray-900">{type}</h3>
-                      <div className="flex gap-2">
-                        <button 
-                          onClick={handleRefreshMenu}
-                          className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
-                          title="Ganti menu ini"
-                        >
-                          <RefreshCw size={16}/>
-                        </button>
-                        <button 
-                          onClick={() => toggleFoodConsumed(type, type)} 
-                          className={`w-8 h-8 flex items-center justify-center rounded-full transition-all ${isDone ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-300 hover:bg-gray-200'}`}
-                        >
-                          <Check size={16}/>
-                        </button>
-                      </div>
-                    </div>
-                    <p className="text-gray-800 font-medium mb-3">{meal.menu}</p>
-                    
-                    {/* Waktu & Kalori */}
-                    <div className="flex items-center gap-2 text-sm text-gray-500 mb-3">
-                      <span>⏰ {meal.time}</span>
-                      <span>🔥 {meal.calories} kcal</span>
-                    </div>
-
-                    {/* Macronutrients */}
-                    <div className="grid grid-cols-3 gap-2 mb-3 p-2 bg-gray-50 rounded-lg">
-                      <div className="text-center">
-                        <p className="text-xs font-bold text-orange-600">{meal.protein}g</p>
-                        <p className="text-xs text-gray-500">Protein</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-xs font-bold text-blue-600">{meal.carbs}g</p>
-                        <p className="text-xs text-gray-500">Carbs</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-xs font-bold text-amber-600">{meal.fat}g</p>
-                        <p className="text-xs text-gray-500">Fat</p>
-                      </div>
-                    </div>
-
-                    <p className="text-xs text-gray-500 bg-gray-50 p-2 rounded italic">"{meal.reasoning}"</p>
-                  </div>
-                );
-              })}
-              {/* Tips AI */}
-              <div className="md:col-span-2 lg:col-span-4 bg-blue-50 p-4 rounded-xl border border-blue-100 flex gap-3">
-                <Info className="text-blue-500 shrink-0" />
-                <div>
-                   <p className="text-sm text-blue-800 font-medium">{aiMealPlan.nutritionTips}</p>
-                   <p className="text-xs text-blue-600 mt-1">Target Minum: {aiMealPlan.hydrationGoal}</p>
-                </div>
-              </div>
-            </div>
-          )
+        {/* Meal Sections */}
+        {isLoadingAI ? (
+            <div className="flex flex-col items-center justify-center py-20"><Loader className="animate-spin text-green-500 mb-4" size={40} /><p className="text-gray-500 text-sm">Meracik menu spesial...</p></div>
+        ) : aiError ? (
+            <div className="text-center p-8 bg-red-50 rounded-xl text-red-600"><p>{aiError}</p><button onClick={generateAIMealPlan} className="mt-2 font-bold underline">Coba Lagi</button></div>
         ) : (
-          // MODE MANUAL (Integrated with AISearch)
-          <div className="grid gap-6 md:grid-cols-2">
-            {(['Sarapan', 'MakanSiang', 'MakanMalam', 'snacks'] as MealType[]).map(type => (
-              <div key={type} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-lg font-bold text-gray-900 capitalize">{type}</h3>
-                  <button 
-                    onClick={() => { setSelectedMeal(type); setShowFoodSelector(true); }} 
-                    className="flex items-center gap-1 text-sm bg-green-50 text-green-700 px-3 py-1.5 rounded-lg hover:bg-green-100 transition-colors"
-                  >
-                    <Plus size={16}/> Tambah
-                  </button>
-                </div>
-                
-                <div className="space-y-3">
-                  {customMealPlan[type].length > 0 ? customMealPlan[type].map(food => {
-                    const isDone = isFoodConsumed(food.id, type);
-                    return (
-                      <div key={food.id} className={`p-4 rounded-xl border transition-all ${isDone ? 'bg-green-50 border-green-100' : 'bg-white border-gray-100'}`}>
-                        <div className="flex items-center justify-between gap-3 mb-3">
-                          <div className="flex items-center gap-3 overflow-hidden min-w-0">
-                            <button 
-                              onClick={() => toggleFoodConsumed(food.id, type)} 
-                              className={`shrink-0 w-6 h-6 rounded border flex items-center justify-center transition-colors ${isDone ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300 text-transparent hover:border-green-400'}`}
-                            >
-                              <Check size={12}/>
-                            </button>
-                            <div className="min-w-0">
-                              <p className={`text-sm font-semibold ${isDone ? 'text-gray-500 line-through' : 'text-gray-800'}`}>{food.name}</p>
-                              <p className="text-xs text-gray-400">{food.servingSize}</p>
-                            </div>
-                          </div>
-                          <button onClick={() => removeFoodFromMeal(food.id, type)} className="text-gray-300 hover:text-red-500 p-1 shrink-0"><Trash2 size={16}/></button>
-                        </div>
-                        
-                        {/* Nutrition Details */}
-                        <div className="grid grid-cols-4 gap-2 text-center bg-gray-50 p-2 rounded-lg">
-                          <div>
-                            <p className="text-xs font-bold text-green-600">{food.calories}</p>
-                            <p className="text-xs text-gray-500">kcal</p>
-                          </div>
-                          <div>
-                            <p className="text-xs font-bold text-orange-600">{food.protein}g</p>
-                            <p className="text-xs text-gray-500">Protein</p>
-                          </div>
-                          <div>
-                            <p className="text-xs font-bold text-blue-600">{food.carbs}g</p>
-                            <p className="text-xs text-gray-500">Carbs</p>
-                          </div>
-                          <div>
-                            <p className="text-xs font-bold text-amber-600">{food.fat}g</p>
-                            <p className="text-xs text-gray-500">Fat</p>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  }) : (
-                    <div className="text-center py-6 text-gray-300 text-xs italic border border-dashed rounded-xl">
-                      Belum ada menu.
+          <div className="space-y-10 pb-20">
+            {MEAL_TYPES.map((type) => {
+              const aiItems = aiMealPlan ? (aiMealPlan[type] || []) : [];
+              const manualItems = customMealPlan[type] || [];
+              const allItems = [...aiItems, ...manualItems];
+              
+              return (
+                 <div key={type} className="w-full">
+                    <div className="flex items-center justify-between px-1 mb-4">
+                        <div><h3 className="text-xl font-bold text-gray-900 capitalize tracking-tight">{type.replace(/([A-Z])/g, ' $1').trim()}</h3><p className="text-xs text-gray-500 font-medium">{type === 'Sarapan' ? 'Energy for the day' : type === 'MakanSiang' ? 'Power up your afternoon' : type === 'MakanMalam' ? 'Recovery & rest' : 'Healthy bites'}</p></div>
+                        <button onClick={() => { setSelectedMeal(type); setShowFoodSelector(true); }} className="p-2 bg-gray-100 hover:bg-gray-200 rounded-full text-gray-600 transition-colors"><Plus size={18} /></button>
                     </div>
-                  )}
-                </div>
-              </div>
-            ))}
+                    <div className="flex overflow-x-auto gap-4 pb-6 px-1 -mx-1 snap-x">
+                       {allItems.length > 0 ? allItems.map((meal: any, idx) => {
+                          const isAi = !!meal.reasoning;
+                          const isDone = meal.id ? isFoodConsumed(meal.id, type) : false;
+                          return (
+                            <div key={`${type}-${meal.id}-${idx}`} className={`snap-center shrink-0 w-[280px] bg-white rounded-2xl p-5 border transition-all duration-300 relative group ${isDone ? 'border-green-200 bg-green-50/30' : 'border-gray-100 shadow-sm hover:shadow-md hover:border-green-200'}`}>
+                               <div className="flex justify-between items-start mb-3"><span className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wider ${isAi ? 'bg-blue-50 text-blue-600' : 'bg-orange-50 text-orange-600'}`}>{isAi ? `Rekomendasi` : 'Manual'}</span>{!isAi && (<button onClick={() => removeFoodFromMeal(meal.id, type)} className="text-gray-300 hover:text-red-500"><Trash2 size={14} /></button>)}</div>
+                               <div className="mb-4"><h4 className={`font-bold text-gray-900 text-lg leading-tight mb-1 ${isDone ? 'line-through text-gray-400' : ''}`}>{meal.menu || meal.name}</h4><div className="flex items-center gap-2 text-xs text-gray-500"><span className="flex items-center gap-1"><Sparkles size={10} className="text-yellow-500"/> {meal.calories} kcal</span><span>•</span><span>{meal.time || 'Anytime'}</span></div><p className="text-xs text-gray-400 mt-2 line-clamp-2 h-8">{meal.portions || meal.servingSize || "1 Porsi"}</p></div>
+                               <div className="grid grid-cols-3 gap-2 mb-4">
+                                  <div className="bg-gray-50 rounded-xl p-2 text-center"><span className="block text-[10px] text-gray-400 font-bold uppercase">Prot</span><span className="block text-xs font-bold text-gray-700">{meal.protein || 0}g</span></div>
+                                  <div className="bg-gray-50 rounded-xl p-2 text-center"><span className="block text-[10px] text-gray-400 font-bold uppercase">Carb</span><span className="block text-xs font-bold text-gray-700">{meal.carbs || 0}g</span></div>
+                                  <div className="bg-gray-50 rounded-xl p-2 text-center"><span className="block text-[10px] text-gray-400 font-bold uppercase">Fat</span><span className="block text-xs font-bold text-gray-700">{meal.fat || 0}g</span></div>
+                               </div>
+                               <button onClick={() => meal.id && toggleFoodConsumed(meal.id, type)} className={`w-full py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all ${isDone ? 'bg-green-500 text-white shadow-green-200 shadow-lg' : 'bg-gray-900 text-white hover:bg-gray-800 shadow-lg shadow-gray-200'}`}>{isDone ? <><Check size={14} /> Selesai</> : 'Tandai Selesai'}</button>
+                            </div>
+                          );
+                       }) : (
+                          <div className="w-full flex flex-col items-center justify-center py-10 border-2 border-dashed border-gray-100 rounded-2xl bg-gray-50/50"><p className="text-sm text-gray-400 font-medium">Belum ada rencana makan</p><button onClick={() => { setSelectedMeal(type); setShowFoodSelector(true); }} className="mt-2 text-xs text-green-600 font-bold hover:underline">+ Tambah Makanan</button></div>
+                       )}
+                    </div>
+                 </div>
+              );
+            })}
           </div>
         )}
 
-        {/* MODAL SEARCH (FoodSearch Integration) */}
+        {/* Modal */}
         {showFoodSelector && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-white w-full max-w-lg rounded-2xl shadow-xl flex flex-col max-h-[90vh]">
@@ -609,13 +512,10 @@ const MealPlanning: React.FC = () => {
                 </div>
                 <button onClick={() => setShowFoodSelector(false)} className="p-2 hover:bg-gray-100 rounded-full"><X size={20}/></button>
               </div>
-                
               <div className="p-4 overflow-y-auto">
-                {/* KOMPONEN AI SEARCH YANG ANDA BUAT */}
                 <AISearch 
                   onSelectFood={(food) => { 
-                    addFoodToMeal({ ...food, id: `f-${Date.now()}` }); 
-                    // Tutup modal otomatis setelah memilih
+                    addFoodToMeal(food); 
                     setShowFoodSelector(false); 
                   }} 
                 />
@@ -623,7 +523,6 @@ const MealPlanning: React.FC = () => {
             </div>
           </div>
         )}
-
       </div>
     </div>
   );
