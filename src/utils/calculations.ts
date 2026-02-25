@@ -47,7 +47,10 @@ export const calculateDailyCalories = (
   return Math.round(tdee + goalAdjustments[goal as keyof typeof goalAdjustments]);
 };
 
-export const getBMICategory = (bmi: number): { category: string; color: string } => {
+export const getBMICategory = (bmi: number | undefined | null): {
+  category: string; color: string 
+} => {
+  if (!bmi || bmi <= 0) return { category: '-', color: 'text-gray-400' };
   if (bmi < 18.5) return { category: 'Underweight', color: 'text-blue-600' };
   if (bmi < 25) return { category: 'Normal weight', color: 'text-green-600' };
   if (bmi < 30) return { category: 'Overweight', color: 'text-yellow-600' };
@@ -56,13 +59,34 @@ export const getBMICategory = (bmi: number): { category: string; color: string }
 
 export const calculateMacroTargets = (
   calories: number | null | undefined,
-  goal: 'weight-loss' | 'weight-gain' | 'muscle-gain' | null | undefined
+  goal: 'weight-loss' | 'weight-gain' | 'muscle-gain' | null | undefined,
+  weight?: number
 ) => {
   if (!calories || !goal) {
     return {
       protein: 0,
       carbs: 0,
       fat: 0
+    };
+  }
+
+  // FIX: Menggunakan rumus Protein = Berat Badan x 2 (gram) sesuai request
+  if (weight && weight > 0) {
+    const proteinGrams = Math.round(weight * 2);
+    const proteinCalories = proteinGrams * 4;
+    
+    // Lemak: 30% dari total kalori (Standar gizi seimbang)
+    const fatCalories = calories * 0.30;
+    const fatGrams = Math.round(fatCalories / 9);
+    
+    // Karbohidrat: Sisa kalori
+    const remainingCalories = calories - proteinCalories - fatCalories;
+    const carbsGrams = Math.max(0, Math.round(remainingCalories / 4));
+
+    return {
+      protein: proteinGrams,
+      carbs: carbsGrams,
+      fat: fatGrams
     };
   }
 

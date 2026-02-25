@@ -25,16 +25,17 @@ import {
 
 // Firebase core
 import { auth, db } from "../firebase";
-
+import { doc, setDoc, getDoc, updateDoc } from "firebase/firestore";
+import { getUserProfile } from "../services/firestore";
 // Firebase auth
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  updateProfile,
+  sendEmailVerification,
+  ConfirmationResult,
 } from "firebase/auth";
-
-// Firebase database
-// Tambahkan 'update' di sini
-import { ref, get, set, update } from "firebase/database"; 
+import authService from "../services/authService";
 
 const Onboarding: React.FC = () => {
   const navigate = useNavigate();
@@ -57,67 +58,83 @@ const Onboarding: React.FC = () => {
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [phoneNumber, setPhoneNumber] = useState("");
+  const [otp, setOtp] = useState("");
+  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
 
   const totalSteps = 4;
 
-  // Auto-sync email to form
-  useEffect(() => {
-    if (loginEmail) {
-      setFormData((prev) => ({ ...prev, email: loginEmail }));
-    }
-  }, [loginEmail]);
-
-  // ==== LOGIN ====
+  // ==== LOGIN (REFACTORED) ====
   const handleLogin = async () => {
+    setIsLoading(true);
+    setLoginError("");
     try {
-      setLoginError(""); // Reset error
+      // 1. Sign in the user
       const userCred = await signInWithEmailAndPassword(
         auth,
         loginEmail,
         loginPassword
       );
-
       const user = userCred.user;
 
-      // AMBIL DATA USER DARI REALTIME DB
-      const snapshot = await get(ref(db, "users/" + user.uid));
-      
-      // Jika data tidak ada di database (misal user lama atau error saat register)
-      if (!snapshot.exists()) {
-        // Opsi: Arahkan ke pengisian profil jika data kosong
-        // setLoginError("Data profil belum lengkap, silakan register ulang atau hubungi admin.");
-        // Atau paksa isi data:
-        // setIsRegister(true); 
-        // setCurrentStep(2);
-        // return;
-        
-        // Untuk sekarang kita biarkan, tapi beri object kosong agar tidak error
-        console.warn("User data not found in DB");
+      // 2. Check if email is verified
+      if (!user.emailVerified) {
+        await sendEmailVerification(user);
+        setLoginError("Email belum terverifikasi. Silakan cek email Anda dan verifikasi.");
+        setIsLoading(false);
+        return;
       }
 
-      const userData = snapshot.exists() ? snapshot.val() : {};
-      const token = await user.getIdToken();
+      // 3. Fetch user profile from Firestore
+      const userProfile = await getUserProfile(user.uid);
 
-      localStorage.setItem("token", token);
+      // 4. Check if profile exists
+      if (!userProfile) {
+        console.warn(`User ${user.uid} authenticated but no profile found in Firestore.`);
+        setLoginError("Your profile is not complete. Please complete the registration steps.");
+        
+        setFormData(prev => ({ ...prev, name: user.displayName || '', email: user.email || '' }));
+        setIsRegister(true);
+        setCurrentStep(2);
+        setIsLoading(false);
+        return;
+      }
       
-      // Gabungkan data auth dan data dari DB untuk localStorage
-      localStorage.setItem("user", JSON.stringify({
-        uid: user.uid,
-        email: user.email,
-        ...userData // Spread data dari database (fullname, bmi, dll)
-      }));
-
+      localStorage.setItem("user", JSON.stringify(userProfile));
       navigate("/dashboard");
+
     } catch (err: any) {
       console.error("Login Error:", err);
-      setLoginError("Login gagal: " + (err.message || "Unknown error"));
+      let friendlyMessage = "An unknown error occurred.";
+      switch (err.code) {
+        case "auth/user-not-found":
+        case "auth/wrong-password":
+        case "auth/invalid-credential":
+          friendlyMessage = "Invalid email or password. Please try again.";
+          break;
+        case "auth/too-many-requests":
+          friendlyMessage = "Too many attempts. Please try again later.";
+          break;
+        case "auth/network-request-failed":
+          friendlyMessage = "Network error. Please check your connection.";
+          break;
+      }
+      setLoginError(friendlyMessage);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   // ==== REGISTER ====
   const handleRegister = async () => {
+    if (!formData.name.trim()) {
+      setLoginError("Full Name is required for registration.");
+      return;
+    }
+    setIsLoading(true);
+    setLoginError("");
     try {
-      setLoginError("");
       const userCred = await createUserWithEmailAndPassword(
         auth,
         loginEmail,
@@ -125,46 +142,151 @@ const Onboarding: React.FC = () => {
       );
 
       const user = userCred.user;
+      await updateProfile(user, { displayName: formData.name });
+      await sendEmailVerification(user);
 
-      // SIMPAN DATA AWAL KE FIREBASE REALTIME DATABASE
       const initialData = {
+        uid: user.uid,
         fullname: formData.name,
+        name: formData.name,
         email: user.email,
-        createdAt: Date.now(),
+        createdAt: new Date().toISOString(),
       };
 
-      await set(ref(db, "users/" + user.uid), initialData);
+      await setDoc(doc(db, "users", user.uid), initialData);
+      localStorage.setItem("user", JSON.stringify(initialData));
 
-      const token = await user.getIdToken();
-
-      localStorage.setItem("token", token);
-      localStorage.setItem("user", JSON.stringify({
-        uid: user.uid,
-        ...initialData
-      }));
-
-      setCurrentStep(2);
+      setLoginError("Email verifikasi telah dikirim. Silakan cek inbox Anda sebelum login.");
+      setIsRegister(false);
+      setLoginEmail("");
+      setLoginPassword("");
     } catch (err: any) {
       console.error("Register Error:", err);
-      setLoginError("Register gagal: " + err.message);
+      let friendlyMessage = "Registration failed.";
+      if (err.code === 'auth/email-already-in-use') {
+        friendlyMessage = "This email is already registered. Please login instead.";
+      }
+      setLoginError(friendlyMessage);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // ==== FINAL SUBMIT (UPDATED) ====
+  // ==== SOCIAL LOGIN HANDLERS ====
+  const handleGoogleLogin = async () => {
+    setIsLoading(true);
+    setLoginError("");
+    try {
+      const user = await authService.loginWithGoogle();
+      const userProfile = await getUserProfile(user.uid);
+      if (!userProfile) {
+        const newProfile = {
+          uid: user.uid,
+          fullname: user.displayName || "",
+          name: user.displayName || "",
+          email: user.email,
+          createdAt: new Date().toISOString(),
+        };
+        await setDoc(doc(db, "users", user.uid), newProfile);
+        localStorage.setItem("user", JSON.stringify(newProfile));
+      } else {
+        localStorage.setItem("user", JSON.stringify(userProfile));
+      }
+      navigate("/dashboard");
+    } catch (err: any) {
+      console.error("Google Login Error:", err);
+      setLoginError("Google login failed. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleFacebookLogin = async () => {
+    setIsLoading(true);
+    setLoginError("");
+    try {
+      const user = await authService.loginWithFacebook();
+      const userProfile = await getUserProfile(user.uid);
+      if (!userProfile) {
+        const newProfile = {
+          uid: user.uid,
+          fullname: user.displayName || "",
+          name: user.displayName || "",
+          email: user.email,
+          createdAt: new Date().toISOString(),
+        };
+        await setDoc(doc(db, "users", user.uid), newProfile);
+        localStorage.setItem("user", JSON.stringify(newProfile));
+      } else {
+        localStorage.setItem("user", JSON.stringify(userProfile));
+      }
+      navigate("/dashboard");
+    } catch (err: any) {
+      console.error("Facebook Login Error:", err);
+      setLoginError("Facebook login failed. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSendOTP = async () => {
+    setIsLoading(true);
+    setLoginError("");
+    try {
+      const result = await authService.signInWithPhone(phoneNumber);
+      setConfirmationResult(result);
+    } catch (err: any) {
+      console.error("Send OTP Error:", err);
+      setLoginError("Gagal mengirim OTP. Pastikan nomor telepon benar (format: +62...)");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleConfirmOTP = async () => {
+    if (!confirmationResult) return;
+    setIsLoading(true);
+    setLoginError("");
+    try {
+      const user = await authService.confirmPhone(confirmationResult, otp);
+      const userProfile = await getUserProfile(user.uid);
+      if (!userProfile) {
+        const newProfile = {
+          uid: user.uid,
+          fullname: user.displayName || "",
+          name: user.displayName || "",
+          phone: user.phoneNumber,
+          createdAt: new Date().toISOString(),
+        };
+        await setDoc(doc(db, "users", user.uid), newProfile);
+        localStorage.setItem("user", JSON.stringify(newProfile));
+      } else {
+        localStorage.setItem("user", JSON.stringify(userProfile));
+      }
+      navigate("/dashboard");
+    } catch (err: any) {
+      console.error("Confirm OTP Error:", err);
+      setLoginError("OTP salah atau kadaluarsa. Silakan coba lagi.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // ==== FINAL SUBMIT ====
   const handleComplete = async () => {
     const user = auth.currentUser;
     if (!user) {
-      alert("User not logged in");
+      setLoginError("You are not logged in. Please go back to the login step.");
+      setCurrentStep(1);
       return;
     }
 
+    setIsLoading(true);
     try {
-      // Validasi dan parsing angka dengan fallback
       const age = parseInt(formData.age) || 0;
       const height = parseInt(formData.height) || 0;
       const weight = parseInt(formData.weight) || 0;
 
-      // Hitung data kesehatan
       const bmi = calculateBMI(weight, height);
       const idealWeight = calculateIdealWeight(height, formData.gender as "male" | "female");
       const dailyCalories = calculateDailyCalories(
@@ -176,40 +298,37 @@ const Onboarding: React.FC = () => {
         formData.goal
       );
 
-      // Siapkan payload lengkap
       const payload = {
-        fullname: formData.name || "", // Pastikan key konsisten (fullname vs name)
         age,
-        gender: formData.gender || "",
+        gender: formData.gender,
         height,
         weight,
-        activityLevel: formData.activityLevel || "",
-        goal: formData.goal || "",
-        dietaryRestrictions: formData.dietaryRestrictions || [],
-        allergies: formData.allergies || [],
+        activityLevel: formData.activityLevel,
+        goal: formData.goal,
+        dietaryRestrictions: formData.dietaryRestrictions,
+        allergies: formData.allergies,
         bmi,
         idealWeight,
         dailyCalories,
-        updatedAt: Date.now()
+        updatedAt: new Date().toISOString(),
+        profileCompleted: true
       };
 
-      // === PERBAIKAN: UPDATE LANGSUNG KE FIREBASE ===
-      // Jangan gunakan fetch ke localhost:5000 lagi
-      await update(ref(db, "users/" + user.uid), payload);
+      await setDoc(doc(db, "users", user.uid), payload, { merge: true });
 
-      // Update LocalStorage agar Dashboard langsung dapat data terbaru
       const currentUserLocal = JSON.parse(localStorage.getItem("user") || "{}");
       localStorage.setItem("user", JSON.stringify({
         ...currentUserLocal,
         ...payload
       }));
-
-      alert("Profile updated successfully!");
-      navigate("/dashboard"); 
+      
+      navigate("/dashboard");
 
     } catch (err: any) {
       console.error("HandleComplete Error:", err);
-      alert("Gagal menyimpan data ke Firebase: " + (err.message || "Unknown error"));
+      setLoginError("Failed to save profile data. Please try again.");
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -305,77 +424,176 @@ const Onboarding: React.FC = () => {
                 </p>
               </div>
 
-              {isRegister && (
+              {/* Email & Password Form */}
+              <div className="space-y-4">
+                {isRegister && (
+                  <div>
+                    <label className="block font-medium mb-1">Full Name</label>
+                    <input
+                      type="text"
+                      value={formData.name}
+                      onChange={(e) =>
+                        setFormData({ ...formData, name: e.target.value })
+                      }
+                      className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-green-400"
+                      placeholder="Enter your full name"
+                    />
+                  </div>
+                )}
+
                 <div>
-                  <label className="block font-medium mb-1">Full Name</label>
+                  <label className="block font-medium mb-1">Email</label>
                   <input
-                    type="text"
-                    value={formData.name}
-                    onChange={(e) =>
-                      setFormData({ ...formData, name: e.target.value })
-                    }
-                    className="w-full px-4 py-3 border rounded-lg"
-                    placeholder="Enter your full name"
+                    type="email"
+                    value={loginEmail}
+                    onChange={(e) => setLoginEmail(e.target.value)}
+                    className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-green-400"
+                    placeholder="Enter your email"
                   />
                 </div>
-              )}
 
-              <div>
-                <label className="block font-medium mb-1">Email</label>
-                <input
-                  type="email"
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  className="w-full px-4 py-3 border rounded-lg"
-                  placeholder="Enter your email"
-                />
-              </div>
+                <div>
+                  <label className="block font-medium mb-1">Password</label>
+                  <input
+                    type="password"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-green-400"
+                    placeholder="Enter your password"
+                  />
+                </div>
 
-              <div>
-                <label className="block font-medium mb-1">Password</label>
-                <input
-                  type="password"
-                  value={loginPassword}
-                  onChange={(e) => setLoginPassword(e.target.value)}
-                  className="w-full px-4 py-3 border rounded-lg"
-                  placeholder="Enter your password"
-                />
-              </div>
-
-              {loginError && (
-                <p className="text-red-600 text-sm">{loginError}</p>
-              )}
-
-              <button
-                onClick={isRegister ? handleRegister : handleLogin}
-                className="w-full px-8 py-3 bg-gradient-to-r from-green-600 to-blue-600 rounded-lg text-white font-semibold"
-              >
-                {isRegister ? "Register" : "Login"}
-              </button>
-
-              <p className="text-center text-sm mt-4">
-                {isRegister ? (
-                  <>
-                    Already have an account?{" "}
-                    <span
-                      className="text-green-600 cursor-pointer font-semibold"
-                      onClick={() => setIsRegister(false)}
-                    >
-                      Login
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    Don’t have an account?{" "}
-                    <span
-                      className="text-green-600 cursor-pointer font-semibold"
-                      onClick={() => setIsRegister(true)}
-                    >
-                      Register
-                    </span>
-                  </>
+                {loginError && (
+                  <p className="text-red-600 text-sm bg-red-50 p-3 rounded-lg">{loginError}</p>
                 )}
-              </p>
+
+                <button
+                  onClick={isRegister ? handleRegister : handleLogin}
+                  disabled={isLoading}
+                  className="w-full px-8 py-3 bg-gradient-to-r from-green-600 to-blue-600 rounded-lg text-white font-semibold disabled:opacity-50 hover:shadow-lg transition"
+                >
+                  {isLoading ? "Processing..." : (isRegister ? "Register" : "Login")}
+                </button>
+
+                <p className="text-center text-sm mt-4">
+                  {isRegister ? (
+                    <>
+                      Already have an account?{" "}
+                      <span
+                        className="text-green-600 cursor-pointer font-semibold hover:underline"
+                        onClick={() => {
+                          setIsRegister(false);
+                          setLoginError("");
+                          setLoginEmail("");
+                          setLoginPassword("");
+                        }}
+                      >
+                        Login
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      Don't have an account?{" "}
+                      <span
+                        className="text-green-600 cursor-pointer font-semibold hover:underline"
+                        onClick={() => {
+                          setIsRegister(true);
+                          setLoginError("");
+                        }}
+                      >
+                        Register
+                      </span>
+                    </>
+                  )}
+                </p>
+              </div>
+
+              {/* Divider */}
+              <div className="flex items-center my-6">
+                <div className="flex-1 h-px bg-gray-300" />
+                <div className="px-4 text-sm text-gray-500 font-medium">OR</div>
+                <div className="flex-1 h-px bg-gray-300" />
+              </div>
+
+              {/* Social Login Buttons */}
+              <div className="space-y-3">
+                <button
+                  onClick={handleGoogleLogin}
+                  disabled={isLoading}
+                  className="w-full flex items-center justify-center gap-3 py-3 rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50 transition font-medium"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                    <path d="M21.35 11.1h-9.18v2.8h5.36c-.23 1.4-1.6 4.1-5.36 4.1-3.22 0-5.85-2.66-5.85-5.95 0-3.29 2.63-5.95 5.85-5.95 1.84 0 3.06.79 3.76 1.46l2.56-2.47C17.57 3.4 15.6 2.5 12.17 2.5 6.84 2.5 2.5 6.86 2.5 12.18 2.5 17.51 6.84 21.86 12.17 21.86c6 0 9.9-4.2 9.9-10.18 0-.68-.07-1.2-.72-1.58z" fill="#4285F4"/>
+                  </svg>
+                  Login with Google
+                </button>
+
+                <button
+                  onClick={handleFacebookLogin}
+                  disabled={isLoading}
+                  className="w-full flex items-center justify-center gap-3 py-3 rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50 transition font-medium"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                    <path d="M22 12.07C22 6.51 17.52 2 12 2S2 6.51 2 12.07c0 4.9 3.66 8.96 8.44 9.82v-6.94H8.08V12.1h2.36V9.79c0-2.33 1.38-3.61 3.49-3.61.99 0 2.03.18 2.03.18v2.23h-1.14c-1.12 0-1.47.7-1.47 1.41v1.7h2.5l-.4 2.85h-2.1v6.94C18.34 21.03 22 16.97 22 12.07z" fill="#1877F2"/>
+                  </svg>
+                  Login with Facebook
+                </button>
+              </div>
+
+              {/* Phone OTP */}
+              <div className="border-t pt-6">
+                <p className="text-sm font-semibold text-gray-700 mb-3">Login dengan Nomor Telepon</p>
+                
+                {!confirmationResult ? (
+                  <div className="space-y-3">
+                    <input
+                      type="tel"
+                      value={phoneNumber}
+                      onChange={(e) => setPhoneNumber(e.target.value)}
+                      placeholder="+62 812 3456 7890"
+                      className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-green-400"
+                    />
+                    <button
+                      onClick={handleSendOTP}
+                      disabled={isLoading || !phoneNumber}
+                      className="w-full px-4 py-3 bg-green-600 text-white rounded-lg font-semibold disabled:opacity-50 hover:bg-green-700 transition"
+                    >
+                      {isLoading ? "Mengirim..." : "Kirim OTP"}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-sm text-gray-600">Kode OTP telah dikirim ke {phoneNumber}</p>
+                    <input
+                      type="text"
+                      value={otp}
+                      onChange={(e) => setOtp(e.target.value)}
+                      placeholder="Masukkan 6 digit OTP"
+                      maxLength={6}
+                      className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-green-400 text-center text-xl font-mono"
+                    />
+                    <button
+                      onClick={handleConfirmOTP}
+                      disabled={isLoading || otp.length !== 6}
+                      className="w-full px-4 py-3 bg-green-600 text-white rounded-lg font-semibold disabled:opacity-50 hover:bg-green-700 transition"
+                    >
+                      {isLoading ? "Verifying..." : "Verify OTP"}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setConfirmationResult(null);
+                        setOtp("");
+                        setPhoneNumber("");
+                      }}
+                      className="w-full px-4 py-3 text-gray-600 rounded-lg font-semibold hover:bg-gray-100 transition"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div id="recaptcha-container" className="flex justify-center" />
             </div>
           )}
 
@@ -620,10 +838,10 @@ const Onboarding: React.FC = () => {
 
               <button
                 onClick={handleNext}
-                disabled={!isStepValid()}
-                className="flex items-center px-8 py-3 bg-gradient-to-r from-green-600 to-blue-600 text-white font-semibold rounded-lg shadow-lg"
+                disabled={!isStepValid() || isLoading}
+                className="flex items-center px-8 py-3 bg-gradient-to-r from-green-600 to-blue-600 text-white font-semibold rounded-lg shadow-lg disabled:opacity-50"
               >
-                {currentStep === totalSteps ? "Complete Setup" : "Next"}
+                {isLoading ? "Saving..." : (currentStep === totalSteps ? "Complete Setup" : "Next")}
                 <ChevronRight className="h-5 w-5 ml-1" />
               </button>
             </div>
